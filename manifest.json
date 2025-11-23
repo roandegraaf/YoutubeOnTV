@@ -1,6 +1,6 @@
 {
   "name": "YoutubeOnTV",
-  "version_number": "0.2.5",
+  "version_number": "0.2.6",
   "website_url": "https://github.com/roandegraaf/YoutubeOnTV",
   "description": "Watch YouTube videos on in-game TVs! Adds terminal commands to control video playback on ship TVs. Synced for all players.",
   "dependencies": [

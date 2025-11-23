@@ -2,7 +2,7 @@
 # This script creates a properly structured Thunderstore package
 
 param(
-    [string]$Version = "0.2.5",
+    [string]$Version = "0.2.6",
     [string]$BuildConfig = "Debug"
 )
 

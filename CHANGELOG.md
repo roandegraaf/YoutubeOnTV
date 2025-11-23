@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.6] - 2025-11-23
+
+### Changed
+- Fixed bug where video played in a loop after ending
+
 ## [0.2.5] - 2025-11-23
 
 ### Changed
