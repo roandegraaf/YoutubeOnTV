@@ -59,8 +59,6 @@ namespace YoutubeOnTV
                 go.AddComponent<VideoManager>();
                 mls.LogInfo("Adding NetworkHandler...");
                 go.AddComponent<NetworkHandler>();
-                mls.LogInfo("Adding UIWindow...");
-                go.AddComponent<UIWindow>();
                 mls.LogInfo("All components added successfully!");
             }
         }

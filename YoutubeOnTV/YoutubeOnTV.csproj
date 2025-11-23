@@ -83,7 +83,6 @@
     <Compile Include="VideoQueue.cs" />
     <Compile Include="VideoStreamer.cs" />
     <Compile Include="NetworkHandler.cs" />
-    <Compile Include="UIWindow.cs" />
     <Compile Include="TVController.cs" />
     <Compile Include="Patches\TVScriptPatch.cs" />
     <Compile Include="Patches\TerminalPatch.cs" />
