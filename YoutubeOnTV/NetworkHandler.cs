@@ -15,6 +15,8 @@ namespace YoutubeOnTV
         private LNetworkMessage<VideoPlayData> playVideoMessage;
         private LNetworkMessage<float> syncPlaybackMessage;
         private LNetworkEvent playFallbackEvent;
+        private LNetworkEvent requestTVStateEvent;
+        private LNetworkMessage<TVStateData> syncTVStateMessage;
 
         private void Awake()
         {
@@ -72,6 +74,18 @@ namespace YoutubeOnTV
             playFallbackEvent = LNetworkEvent.Connect(
                 identifier: "YoutubeOnTV_PlayFallback",
                 onClientReceived: OnClientReceivedPlayFallback
+            );
+
+            // Request TV state (client asks host for current state)
+            requestTVStateEvent = LNetworkEvent.Connect(
+                identifier: "YoutubeOnTV_RequestTVState",
+                onServerReceived: OnServerReceivedRequestTVState
+            );
+
+            // Sync TV state (host sends current state to clients)
+            syncTVStateMessage = LNetworkMessage<TVStateData>.Connect(
+                identifier: "YoutubeOnTV_SyncTVState",
+                onClientReceived: OnClientReceivedSyncTVState
             );
 
             YoutubeOnTVBase.Instance.mls.LogInfo("Network messages initialized!");
@@ -173,6 +187,36 @@ namespace YoutubeOnTV
             YoutubeOnTVBase.Instance.mls.LogInfo("Broadcasting play fallback");
         }
 
+        /// <summary>
+        /// Request current TV state from host (client only)
+        /// </summary>
+        public void RequestTVState()
+        {
+            if (LNetworkUtils.IsHostOrServer)
+            {
+                YoutubeOnTVBase.Instance.mls.LogWarning("Host doesn't need to request TV state!");
+                return;
+            }
+
+            requestTVStateEvent.InvokeServer();
+            YoutubeOnTVBase.Instance.mls.LogInfo("Requesting TV state from host");
+        }
+
+        /// <summary>
+        /// Broadcast current TV state to all clients (host only)
+        /// </summary>
+        public void BroadcastTVState(TVStateData state)
+        {
+            if (!LNetworkUtils.IsHostOrServer)
+            {
+                YoutubeOnTVBase.Instance.mls.LogWarning("Only host can broadcast TV state!");
+                return;
+            }
+
+            syncTVStateMessage.SendClients(state);
+            YoutubeOnTVBase.Instance.mls.LogInfo($"Broadcasting TV state - TVOn: {state.isTVOn}, Fallback: {state.isPlayingFallback}, URL: {state.currentVideoUrl}");
+        }
+
         // ===== SERVER CALLBACKS =====
 
         private void OnServerReceivedAddVideo(string input, ulong clientId)
@@ -197,6 +241,19 @@ namespace YoutubeOnTV
 
             // Broadcast to all clients to clear
             clearQueueEvent.InvokeClients();
+        }
+
+        private void OnServerReceivedRequestTVState(ulong clientId)
+        {
+            YoutubeOnTVBase.Instance.mls.LogInfo($"[Host] Received TV state request from client {clientId}");
+
+            // Get current TV state from VideoManager and broadcast to all clients
+            // This ensures the requesting client and any other clients get synced
+            if (VideoManager.Instance != null)
+            {
+                TVStateData state = VideoManager.Instance.GetCurrentTVState();
+                BroadcastTVState(state);
+            }
         }
 
         // ===== CLIENT CALLBACKS =====
@@ -258,6 +315,16 @@ namespace YoutubeOnTV
                 VideoManager.Instance.PlayFallbackFromNetwork();
             }
         }
+
+        private void OnClientReceivedSyncTVState(TVStateData state)
+        {
+            YoutubeOnTVBase.Instance.mls.LogInfo($"[Client] Received TV state - TVOn: {state.isTVOn}, Fallback: {state.isPlayingFallback}, URL: {state.currentVideoUrl}");
+
+            if (VideoManager.Instance != null)
+            {
+                VideoManager.Instance.ApplyTVStateFromNetwork(state);
+            }
+        }
     }
 
     // Data structure for video playback sync
@@ -266,5 +333,16 @@ namespace YoutubeOnTV
     {
         public string url;
         public float startTime;
+    }
+
+    // Data structure for complete TV state sync (used when players join)
+    [System.Serializable]
+    public struct TVStateData
+    {
+        public bool isTVOn;
+        public bool isPlayingFallback;
+        public string currentVideoUrl;
+        public float currentPlaybackTime;
+        public bool isPlaying;
     }
 }

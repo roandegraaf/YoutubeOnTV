@@ -44,6 +44,32 @@ namespace YoutubeOnTV
             }
         }
 
+        private void Start()
+        {
+            // Clients automatically request TV state when they join
+            // Delay slightly to ensure network is fully initialized
+            if (!LNetworkUtils.IsHostOrServer)
+            {
+                logger.LogInfo("Client joining - will request TV state from host");
+                Invoke(nameof(RequestTVStateFromHost), 0.5f);
+            }
+        }
+
+        /// <summary>
+        /// Requests the current TV state from the host (called automatically when client joins)
+        /// </summary>
+        private void RequestTVStateFromHost()
+        {
+            if (NetworkHandler.Instance != null)
+            {
+                NetworkHandler.Instance.RequestTVState();
+            }
+            else
+            {
+                logger.LogWarning("NetworkHandler not found, cannot request TV state");
+            }
+        }
+
         private void Update()
         {
             if (TVController.Instance == null)
@@ -438,6 +464,120 @@ namespace YoutubeOnTV
             {
                 TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: true);
                 isPlayingFallback = true;
+                hasStartedCurrentVideo = false;
+                CurrentVideoUrl = null;
+            }
+        }
+
+        /// <summary>
+        /// Gets the current TV state for network synchronization (host only)
+        /// </summary>
+        public TVStateData GetCurrentTVState()
+        {
+            var state = new TVStateData
+            {
+                isTVOn = IsTVOn(),
+                isPlayingFallback = isPlayingFallback,
+                currentVideoUrl = CurrentVideoUrl,
+                currentPlaybackTime = 0f,
+                isPlaying = false
+            };
+
+            if (TVController.Instance != null)
+            {
+                state.isPlaying = TVController.Instance.IsPlaying();
+
+                if (state.isPlaying && !isPlayingFallback)
+                {
+                    state.currentPlaybackTime = (float)TVController.Instance.videoPlayer.time;
+                }
+            }
+
+            logger.LogInfo($"Gathering TV state - TVOn: {state.isTVOn}, Fallback: {state.isPlayingFallback}, Playing: {state.isPlaying}, URL: {state.currentVideoUrl}");
+            return state;
+        }
+
+        /// <summary>
+        /// Applies received TV state from network (client only)
+        /// </summary>
+        public void ApplyTVStateFromNetwork(TVStateData state)
+        {
+            logger.LogInfo($"Applying TV state - TVOn: {state.isTVOn}, Fallback: {state.isPlayingFallback}, URL: {state.currentVideoUrl}");
+
+            // Don't let host apply network state - they are the source of truth
+            if (LNetworkUtils.IsHostOrServer)
+                return;
+
+            if (TVController.Instance == null)
+            {
+                logger.LogError("Cannot apply TV state: TVController not found!");
+                return;
+            }
+
+            TVScript tvScript = TVController.Instance.GetTVScript();
+            if (tvScript == null)
+            {
+                logger.LogError("Cannot apply TV state: TVScript not found!");
+                return;
+            }
+
+            // If TV is off, make sure it's off and stop playback
+            if (!state.isTVOn)
+            {
+                logger.LogInfo("TV is off, ensuring TV is off and stopping playback");
+
+                if (tvScript.tvOn)
+                {
+                    tvScript.TurnTVOnOff(false);
+                }
+
+                TVController.Instance.Stop();
+                isPlayingFallback = false;
+                hasStartedCurrentVideo = false;
+                CurrentVideoUrl = null;
+                return;
+            }
+
+            // TV should be on - turn it on if it's not already
+            if (!tvScript.tvOn)
+            {
+                logger.LogInfo("Turning on TV to sync with host");
+                tvScript.TurnTVOnOff(true);
+            }
+
+            // TV is on - apply the appropriate state
+            if (state.isPlayingFallback)
+            {
+                // Play fallback video
+                logger.LogInfo("Syncing to fallback video");
+                string fallbackPath = GetFallbackVideoPath();
+                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: true);
+                isPlayingFallback = true;
+                hasStartedCurrentVideo = false;
+                CurrentVideoUrl = null;
+            }
+            else if (!string.IsNullOrEmpty(state.currentVideoUrl))
+            {
+                // Play the current video at the specified time
+                logger.LogInfo($"Syncing to video: {state.currentVideoUrl} at {state.currentPlaybackTime}s");
+                CurrentVideoUrl = state.currentVideoUrl;
+                hasStartedCurrentVideo = true;
+                isPlayingFallback = false;
+
+                TVController.Instance.PlayVideo(state.currentVideoUrl);
+
+                // Set playback position after video is prepared
+                if (state.currentPlaybackTime > 0f)
+                {
+                    StartCoroutine(SetPlaybackTimeWhenReady(state.currentPlaybackTime));
+                }
+            }
+            else
+            {
+                // TV is on but nothing is playing
+                logger.LogInfo("TV is on but nothing is playing");
+                TVController.Instance.Stop();
+                isPlayingFallback = false;
                 hasStartedCurrentVideo = false;
                 CurrentVideoUrl = null;
             }
