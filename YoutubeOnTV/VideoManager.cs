@@ -337,7 +337,7 @@ namespace YoutubeOnTV
 
             if (TVController.Instance != null)
             {
-                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: true);
+                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: false);
                 isPlayingFallback = true;
 
                 // Host broadcasts to all clients to play fallback
@@ -462,7 +462,7 @@ namespace YoutubeOnTV
 
             if (TVController.Instance != null)
             {
-                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: true);
+                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: false);
                 isPlayingFallback = true;
                 hasStartedCurrentVideo = false;
                 CurrentVideoUrl = null;
@@ -551,7 +551,7 @@ namespace YoutubeOnTV
                 // Play fallback video
                 logger.LogInfo("Syncing to fallback video");
                 string fallbackPath = GetFallbackVideoPath();
-                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: true);
+                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: false);
                 isPlayingFallback = true;
                 hasStartedCurrentVideo = false;
                 CurrentVideoUrl = null;
