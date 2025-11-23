@@ -1,0 +1,39 @@
+# Changelog
+
+All notable changes to YoutubeOnTV will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.2.2] - 2025-11-22
+
+### Changed
+- Updated YouTube URL handling
+- Fixed bug where turning off and on the TV would cause the video to get stuck
+
+## [0.2.1] - 2025-11-22
+
+### Changed
+- Updated README
+
+## [0.2.0] - 2025-11-22
+
+### Changed
+- Replaced bundled yt-dlp.exe with YoutubeDLSharp library dependency
+- yt-dlp.exe now downloads automatically on first run (no manual installation needed)
+- Cleaner mod distribution (no longer bundling .exe files with the mod)
+
+### Added
+- Added Lordfirespeed-YoutubeDLSharp-1.1.0 as a dependency
+
+## [0.1.0] - 2025-11-22
+
+### Added
+- Initial release
+- Terminal commands for TV control (tv add, tv queue, tv skip, tv clear)
+- YouTube video streaming to in-game TVs
+- Network synchronization for multiplayer
+- Video queue management
+- yt-dlp integration for video downloading
+- Fallback video support
+- TerminalApi integration
