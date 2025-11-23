@@ -2,6 +2,8 @@ using System.IO;
 using BepInEx;
 using BepInEx.Logging;
 using UnityEngine;
+using LethalNetworkAPI;
+using LethalNetworkAPI.Utils;
 
 namespace YoutubeOnTV
 {
@@ -16,6 +18,10 @@ namespace YoutubeOnTV
         private bool skipRequested = false;
         private bool hasStartedCurrentVideo = false;
         private bool isPlayingFallback = false;
+
+        // Network sync
+        private float lastSyncTime = 0f;
+        private const float SYNC_INTERVAL = 2f; // Sync every 2 seconds
 
         // Path to fallback video file (will be resolved to absolute path)
         private static string GetFallbackVideoPath()
@@ -57,8 +63,8 @@ namespace YoutubeOnTV
                 return;
             }
 
-            // TV is on - decide what to play
-            if (!IsLoadingVideo)
+            // TV is on - decide what to play (only host manages this)
+            if (LNetworkUtils.IsHostOrServer && !IsLoadingVideo)
             {
                 if (!VideoQueue.IsEmpty())
                 {
@@ -83,6 +89,21 @@ namespace YoutubeOnTV
                     if (!isPlayingFallback && !TVController.Instance.IsPlaying())
                     {
                         PlayFallbackVideo();
+                    }
+                }
+            }
+
+            // Host periodically syncs playback position to all clients
+            if (LNetworkUtils.IsHostOrServer && TVController.Instance.IsPlaying() && !isPlayingFallback)
+            {
+                if (Time.time - lastSyncTime >= SYNC_INTERVAL)
+                {
+                    lastSyncTime = Time.time;
+                    float currentTime = (float)TVController.Instance.videoPlayer.time;
+
+                    if (NetworkHandler.Instance != null)
+                    {
+                        NetworkHandler.Instance.BroadcastPlaybackTime(currentTime);
                     }
                 }
             }
@@ -178,10 +199,16 @@ namespace YoutubeOnTV
                 CurrentVideoUrl = resolvedUrl;
                 logger.LogInfo("Video URL resolved successfully!");
 
-                // Tell TV to play this video
+                // Host tells TV to play this video AND broadcasts to all clients
                 if (TVController.Instance != null)
                 {
                     TVController.Instance.PlayVideo(resolvedUrl);
+
+                    // Host broadcasts to all clients to play this video
+                    if (LNetworkUtils.IsHostOrServer && NetworkHandler.Instance != null)
+                    {
+                        NetworkHandler.Instance.BroadcastPlayVideo(resolvedUrl, 0f);
+                    }
                 }
                 else
                 {
@@ -286,6 +313,12 @@ namespace YoutubeOnTV
             {
                 TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: true);
                 isPlayingFallback = true;
+
+                // Host broadcasts to all clients to play fallback
+                if (LNetworkUtils.IsHostOrServer && NetworkHandler.Instance != null)
+                {
+                    NetworkHandler.Instance.BroadcastPlayFallback();
+                }
             }
             else
             {
@@ -316,6 +349,97 @@ namespace YoutubeOnTV
             {
                 logger.LogInfo("Queue is empty, will play fallback");
                 // Update loop will handle playing fallback
+            }
+        }
+
+        /// <summary>
+        /// Called by NetworkHandler when receiving a play video command from host
+        /// </summary>
+        public void PlayVideoFromNetwork(string url, float startTime)
+        {
+            logger.LogInfo($"Playing video from network: {url} at {startTime}s");
+
+            // Don't let clients trigger this - only respond to host's broadcast
+            if (LNetworkUtils.IsHostOrServer)
+                return;
+
+            CurrentVideoUrl = url;
+            hasStartedCurrentVideo = true;
+            isPlayingFallback = false;
+
+            if (TVController.Instance != null)
+            {
+                TVController.Instance.PlayVideo(url);
+
+                // Set playback position after video is prepared
+                if (startTime > 0f)
+                {
+                    StartCoroutine(SetPlaybackTimeWhenReady(startTime));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called by NetworkHandler to sync playback position from host
+        /// </summary>
+        public void SyncPlaybackTime(float time)
+        {
+            // Don't sync if we're the host or not playing
+            if (LNetworkUtils.IsHostOrServer || TVController.Instance == null)
+                return;
+
+            if (!TVController.Instance.IsPlaying())
+                return;
+
+            // Only sync if the time difference is significant (more than 1 second off)
+            float currentTime = (float)TVController.Instance.videoPlayer.time;
+            float timeDiff = Mathf.Abs(currentTime - time);
+
+            if (timeDiff > 1f)
+            {
+                logger.LogInfo($"Syncing playback time: {currentTime}s -> {time}s (diff: {timeDiff}s)");
+                TVController.Instance.videoPlayer.time = time;
+            }
+        }
+
+        /// <summary>
+        /// Coroutine to set playback time once video is ready
+        /// </summary>
+        private System.Collections.IEnumerator SetPlaybackTimeWhenReady(float startTime)
+        {
+            // Wait until video is prepared
+            while (TVController.Instance != null && !TVController.Instance.videoPlayer.isPrepared)
+            {
+                yield return new WaitForSeconds(0.1f);
+            }
+
+            // Set the playback position
+            if (TVController.Instance != null)
+            {
+                TVController.Instance.videoPlayer.time = startTime;
+                logger.LogInfo($"Set playback start time to {startTime}s");
+            }
+        }
+
+        /// <summary>
+        /// Called by NetworkHandler when receiving a play fallback command from host
+        /// </summary>
+        public void PlayFallbackFromNetwork()
+        {
+            logger.LogInfo("Playing fallback from network");
+
+            // Don't let clients trigger this - only respond to host's broadcast
+            if (LNetworkUtils.IsHostOrServer)
+                return;
+
+            string fallbackPath = GetFallbackVideoPath();
+
+            if (TVController.Instance != null)
+            {
+                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: true);
+                isPlayingFallback = true;
+                hasStartedCurrentVideo = false;
+                CurrentVideoUrl = null;
             }
         }
     }

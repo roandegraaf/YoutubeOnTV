@@ -6,20 +6,15 @@ namespace YoutubeOnTV.Patches
     [HarmonyPatch(typeof(TVScript))]
     internal class TVScriptPatch
     {
-        private static bool initialized = false;
-
         [HarmonyPatch("Update")]
         [HarmonyPrefix]
         private static bool UpdatePatch(TVScript __instance)
         {
-            if (!initialized)
+            // Attach TVController if it doesn't exist on this instance
+            if (__instance.gameObject.GetComponent<TVController>() == null)
             {
-                if (__instance.gameObject.GetComponent<TVController>() == null)
-                {
-                    __instance.gameObject.AddComponent<TVController>();
-                    Debug.Log("Attached TVController to TVScript object.");
-                }
-                initialized = true;
+                __instance.gameObject.AddComponent<TVController>();
+                Debug.Log("Attached TVController to TVScript object.");
             }
 
             // Block vanilla Update - we handle everything in our custom components

@@ -8,7 +8,7 @@ namespace YoutubeOnTV
     {
         public static TVController Instance { get; private set; }
 
-        private VideoPlayer videoPlayer;
+        public VideoPlayer videoPlayer; // Made public for network sync access
         private VideoPlayer vanillaVideoPlayer; // Reference to vanilla TV's VideoPlayer
         private RenderTexture renderTexture; // The TV screen's render texture
         private AudioSource tvAudioSource; // TV's existing AudioSource

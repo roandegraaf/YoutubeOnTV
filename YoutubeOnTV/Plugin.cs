@@ -10,6 +10,7 @@ namespace YoutubeOnTV
 {
     [BepInPlugin("com.roandegraaf.youtubeontv", "YoutubeOnTV", "0.2.3")]
     [BepInDependency("atomic.terminalapi")]
+    [BepInDependency("LethalNetworkAPI")]
     public class YoutubeOnTVBase : BaseUnityPlugin
     {
         private readonly Harmony harmony = new Harmony("com.roandegraaf.youtubeontv");
@@ -157,7 +158,10 @@ namespace YoutubeOnTV
                 }
                 else
                 {
-                    VideoQueue.Add(query);
+                    if (NetworkHandler.Instance != null)
+                    {
+                        NetworkHandler.Instance.RequestAddVideo(query);
+                    }
                     e.ReturnedNode = CreateTerminalNode(
                         $"Added to queue: {query}\n" +
                         $"Queue size: {VideoQueue.Count()}\n\n",
@@ -169,11 +173,10 @@ namespace YoutubeOnTV
             else if (input == "tv clear" || input == "clear tv")
             {
                 int previousCount = VideoQueue.Count();
-                VideoQueue.Clear();
 
-                if (VideoManager.Instance != null)
+                if (NetworkHandler.Instance != null)
                 {
-                    VideoManager.Instance.OnSkipRequested();
+                    NetworkHandler.Instance.RequestClearQueue();
                 }
 
                 e.ReturnedNode = CreateTerminalNode(
@@ -193,11 +196,9 @@ namespace YoutubeOnTV
                 }
                 else
                 {
-                    VideoQueue.Skip();
-
-                    if (VideoManager.Instance != null)
+                    if (NetworkHandler.Instance != null)
                     {
-                        VideoManager.Instance.OnSkipRequested();
+                        NetworkHandler.Instance.RequestSkipVideo();
                     }
 
                     e.ReturnedNode = CreateTerminalNode(
