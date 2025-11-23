@@ -6,6 +6,7 @@
   "dependencies": [
     "BepInEx-BepInExPack-5.4.2100",
     "NotAtomicBomb-TerminalApi-1.5.5",
-    "Lordfirespeed-YoutubeDLSharp-1.1.0"
+    "Lordfirespeed-YoutubeDLSharp-1.1.0",
+    "FlipMods-ObjectVolumeController-1.1.2"
   ]
 }

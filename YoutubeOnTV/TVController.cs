@@ -1,6 +1,5 @@
 using BepInEx.Logging;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.Video;
 
 namespace YoutubeOnTV
@@ -15,10 +14,6 @@ namespace YoutubeOnTV
         private AudioSource tvAudioSource; // TV's existing AudioSource
         private TVScript tvScript;
         private ManualLogSource logger;
-
-        private const float VOLUME_STEP = 0.1f;
-        private float lastVolumeChangeTime = 0f;
-        private const float VOLUME_CHANGE_COOLDOWN = 0.1f;
 
         private void Awake()
         {
@@ -84,71 +79,6 @@ namespace YoutubeOnTV
             videoPlayer.errorReceived += OnVideoError;
 
             logger.LogInfo("TVController initialized successfully!");
-        }
-
-        private void Update()
-        {
-            // Check for volume control when player is near TV
-            if (IsPlayerNearTV())
-            {
-                HandleVolumeControl();
-            }
-        }
-
-        private bool IsPlayerNearTV()
-        {
-            // Check if local player exists
-            if (GameNetworkManager.Instance == null || GameNetworkManager.Instance.localPlayerController == null)
-                return false;
-
-            // Get player position
-            Transform playerTransform = GameNetworkManager.Instance.localPlayerController.transform;
-
-            // Check distance to TV (within 5 units)
-            float distance = Vector3.Distance(transform.position, playerTransform.position);
-            return distance <= 5f;
-        }
-
-        private void HandleVolumeControl()
-        {
-            // Check if keyboard is available
-            if (Keyboard.current == null)
-                return;
-
-            // Cooldown to prevent spamming
-            if (Time.time - lastVolumeChangeTime < VOLUME_CHANGE_COOLDOWN)
-                return;
-
-            bool volumeChanged = false;
-            float newVolume = tvAudioSource.volume;
-
-            // Check for + key (Equals is the = key, which is + when shifted, also check NumpadPlus)
-            if (Keyboard.current[Key.Equals].isPressed || Keyboard.current[Key.NumpadPlus].isPressed)
-            {
-                newVolume = Mathf.Clamp(tvAudioSource.volume + VOLUME_STEP, 0f, 1f);
-                volumeChanged = true;
-            }
-            // Check for - key (also check NumpadMinus)
-            else if (Keyboard.current[Key.Minus].isPressed || Keyboard.current[Key.NumpadMinus].isPressed)
-            {
-                newVolume = Mathf.Clamp(tvAudioSource.volume - VOLUME_STEP, 0f, 1f);
-                volumeChanged = true;
-            }
-
-            if (volumeChanged)
-            {
-                tvAudioSource.volume = newVolume;
-                lastVolumeChangeTime = Time.time;
-
-                // Show volume percentage in chat
-                int volumePercent = Mathf.RoundToInt(newVolume * 100f);
-                if (HUDManager.Instance != null)
-                {
-                    HUDManager.Instance.DisplayTip("TV Volume", $"{volumePercent}%", false, false, "LC_Tip1");
-                }
-
-                logger.LogInfo($"TV volume changed to: {volumePercent}%");
-            }
         }
 
         private void OnDestroy()
