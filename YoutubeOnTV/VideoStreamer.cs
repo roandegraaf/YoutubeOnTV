@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.IO;
 using System.Reflection;
@@ -19,6 +19,8 @@ namespace YoutubeOnTV
         private ManualLogSource _logger;
         private YoutubeDL _ytdl;
         private bool _isInitialized;
+
+        private static readonly TimeSpan YtDlpUpdateInterval = TimeSpan.FromHours(24);
 
         public static VideoStreamer Instance
         {
@@ -55,35 +57,48 @@ namespace YoutubeOnTV
 
         private IEnumerator InitializeYtDlp()
         {
-            // Check if yt-dlp.exe exists, if not download it
-            if (!File.Exists(_ytDlpPath))
+            bool exists = File.Exists(_ytDlpPath);
+            bool stale = exists && DateTime.UtcNow - File.GetLastWriteTimeUtc(_ytDlpPath) > YtDlpUpdateInterval;
+
+            if (exists && !stale)
             {
-                _logger.LogInfo("yt-dlp.exe not found. Downloading...");
+                _logger.LogInfo("yt-dlp.exe found at path and is up to date.");
+                _isInitialized = true;
+                yield break;
+            }
 
-                // DownloadYtDlp expects a directory path, not a file path
-                string dllPath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-                Task downloadTask = YoutubeDLSharp.Utils.DownloadYtDlp(dllPath);
+            _logger.LogInfo(exists
+                ? "yt-dlp.exe is out of date. Downloading the latest release..."
+                : "yt-dlp.exe not found. Downloading the latest release...");
 
-                // Wait for download to complete
-                while (!downloadTask.IsCompleted)
+            // DownloadYtDlp expects a directory path, not a file path
+            string dllPath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            Task downloadTask = YoutubeDLSharp.Utils.DownloadYtDlp(dllPath);
+
+            while (!downloadTask.IsCompleted)
+            {
+                yield return null;
+            }
+
+            if (downloadTask.IsFaulted)
+            {
+                string reason = downloadTask.Exception?.GetBaseException().Message;
+
+                if (exists)
                 {
-                    yield return null;
+                    _logger.LogWarning($"Failed to update yt-dlp.exe, keeping the existing version: {reason}");
+                    _isInitialized = true;
                 }
-
-                if (downloadTask.IsFaulted)
+                else
                 {
-                    _logger.LogError($"Failed to download yt-dlp.exe: {downloadTask.Exception?.GetBaseException().Message}");
+                    _logger.LogError($"Failed to download yt-dlp.exe: {reason}");
                     _isInitialized = false;
-                    yield break;
                 }
 
-                _logger.LogInfo("yt-dlp.exe downloaded successfully!");
-            }
-            else
-            {
-                _logger.LogInfo("yt-dlp.exe found at path.");
+                yield break;
             }
 
+            _logger.LogInfo("yt-dlp.exe is up to date.");
             _isInitialized = true;
         }
 
