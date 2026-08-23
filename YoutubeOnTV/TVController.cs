@@ -14,6 +14,7 @@ namespace YoutubeOnTV
         private AudioSource tvAudioSource; // TV's existing AudioSource
         private TVScript tvScript;
         private ManualLogSource logger;
+        private bool isPreparing;
 
         private void Awake()
         {
@@ -102,17 +103,21 @@ namespace YoutubeOnTV
 
             logger.LogInfo($"Playing video: {url.Substring(0, System.Math.Min(100, url.Length))}...");
 
+            videoPlayer.isLooping = false;
             videoPlayer.url = url;
 
             // Subscribe to prepared event to check audio tracks
             videoPlayer.prepareCompleted -= OnVideoPrepared;
             videoPlayer.prepareCompleted += OnVideoPrepared;
 
+            isPreparing = true;
             videoPlayer.Prepare();
         }
 
         private void OnVideoPrepared(VideoPlayer vp)
         {
+            isPreparing = false;
+
             logger.LogInfo($"Video prepared! Audio tracks: {vp.audioTrackCount}");
 
             if (vp.audioTrackCount > 0)
@@ -136,11 +141,12 @@ namespace YoutubeOnTV
         /// </summary>
         public void Stop()
         {
-            if (videoPlayer.isPlaying)
-            {
-                videoPlayer.Stop();
-                logger.LogInfo("Video stopped");
-            }
+            // Unsubscribe first: a Prepare() already in flight would otherwise start
+            // playing the video we just stopped.
+            videoPlayer.prepareCompleted -= OnVideoPrepared;
+            isPreparing = false;
+            videoPlayer.Stop();
+            logger.LogInfo("Video stopped");
         }
 
         /// <summary>
@@ -184,6 +190,14 @@ namespace YoutubeOnTV
         }
 
         /// <summary>
+        /// Checks if the player is playing or still preparing a video
+        /// </summary>
+        public bool IsBusy()
+        {
+            return isPreparing || videoPlayer.isPlaying;
+        }
+
+        /// <summary>
         /// Sets whether the video should loop
         /// </summary>
         public void SetLooping(bool shouldLoop)
@@ -219,6 +233,7 @@ namespace YoutubeOnTV
             videoPlayer.prepareCompleted -= OnVideoPrepared;
             videoPlayer.prepareCompleted += OnVideoPrepared;
 
+            isPreparing = true;
             videoPlayer.Prepare();
         }
 
@@ -249,6 +264,8 @@ namespace YoutubeOnTV
         /// </summary>
         private void OnVideoError(VideoPlayer vp, string message)
         {
+            isPreparing = false;
+
             logger.LogError($"Video playback error: {message}");
 
             // Notify VideoManager about the error so it can handle retry logic

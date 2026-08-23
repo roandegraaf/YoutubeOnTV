@@ -6,9 +6,6 @@ namespace YoutubeOnTV
     public static class VideoQueue
     {
         private static readonly List<string> _inputs = new List<string>();
-        private static readonly Dictionary<string, int> _retryCount = new Dictionary<string, int>();
-        private static int _ptr = 0;
-        private const int MAX_RETRIES = 2;
 
         public static void Add(string input)
         {
@@ -108,8 +105,6 @@ namespace YoutubeOnTV
         public static void Clear()
         {
             _inputs.Clear();
-            _retryCount.Clear();
-            _ptr = 0;
         }
 
         public static bool IsEmpty()
@@ -117,85 +112,46 @@ namespace YoutubeOnTV
             return _inputs.Count == 0;
         }
 
-        public static string Next()
-        {
-            if (_inputs.Count == 0) return null;
-
-            string result = _inputs[_ptr];
-            _ptr = (_ptr + 1) % _inputs.Count;
-            return result;
-        }
-
-        public static string Current()
-        {
-            if (_inputs.Count == 0) return null;
-            return _inputs[_ptr];
-        }
-
-        public static void Skip()
-        {
-            if (_inputs.Count > 0)
-            {
-                _ptr = (_ptr + 1) % _inputs.Count;
-            }
-        }
-
         public static int Count()
         {
             return _inputs.Count;
         }
 
-        /// <summary>
-        /// Increments the retry count for a video. Returns true if max retries exceeded.
-        /// </summary>
-        public static bool IncrementRetry(string input)
+        public static string Peek()
         {
-            if (!_retryCount.ContainsKey(input))
-            {
-                _retryCount[input] = 0;
-            }
-
-            _retryCount[input]++;
-            UnityEngine.Debug.Log($"[VideoQueue] Retry count for '{input}': {_retryCount[input]}/{MAX_RETRIES}");
-
-            return _retryCount[input] >= MAX_RETRIES;
+            if (_inputs.Count == 0) return null;
+            return _inputs[0];
         }
 
         /// <summary>
-        /// Removes the current video from the queue (used when it fails permanently)
+        /// Removes and returns the video at the front of the queue.
         /// </summary>
-        public static string RemoveCurrent()
+        public static string Dequeue()
         {
             if (_inputs.Count == 0) return null;
 
-            string removed = _inputs[_ptr];
-            _inputs.RemoveAt(_ptr);
-            _retryCount.Remove(removed);
+            string removed = _inputs[0];
+            _inputs.RemoveAt(0);
 
-            // Adjust pointer after removal
-            if (_inputs.Count > 0)
-            {
-                _ptr = _ptr % _inputs.Count;
-            }
-            else
-            {
-                _ptr = 0;
-            }
-
-            UnityEngine.Debug.Log($"[VideoQueue] Removed '{removed}' from queue. Remaining: {_inputs.Count}");
+            UnityEngine.Debug.Log($"[VideoQueue] Dequeued '{removed}'. Remaining: {_inputs.Count}");
             return removed;
         }
 
         /// <summary>
-        /// Resets retry count for a video (used when it succeeds)
+        /// Removes the first entry matching the given input. No-op when it is not queued,
+        /// which keeps a client with a desynced queue from corrupting its own ordering.
         /// </summary>
-        public static void ResetRetry(string input)
+        public static void RemoveFirstMatch(string input)
         {
-            if (_retryCount.ContainsKey(input))
+            int index = _inputs.IndexOf(input);
+            if (index < 0)
             {
-                _retryCount.Remove(input);
-                UnityEngine.Debug.Log($"[VideoQueue] Reset retry count for '{input}'");
+                UnityEngine.Debug.Log($"[VideoQueue] '{input}' not in queue, nothing to remove");
+                return;
             }
+
+            _inputs.RemoveAt(index);
+            UnityEngine.Debug.Log($"[VideoQueue] Removed '{input}'. Remaining: {_inputs.Count}");
         }
     }
 }

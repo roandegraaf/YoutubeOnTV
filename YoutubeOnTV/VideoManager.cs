@@ -15,9 +15,16 @@ namespace YoutubeOnTV
         public bool IsLoadingVideo { get; private set; }
 
         private ManualLogSource logger;
-        private bool skipRequested = false;
-        private bool hasStartedCurrentVideo = false;
         private bool isPlayingFallback = false;
+
+        // Host-only playback state. currentInput is the queue entry that has already been
+        // dequeued and is loading or playing; it is never set on clients.
+        private string currentInput;
+        private int currentRetries;
+        private float retryAtTime;
+
+        private const int MAX_ATTEMPTS = 2;
+        private const float RETRY_DELAY = 3f;
 
         // Network sync
         private float lastSyncTime = 0f;
@@ -75,10 +82,7 @@ namespace YoutubeOnTV
             if (TVController.Instance == null)
                 return;
 
-            // Check if TV is on
-            bool isTVOn = IsTVOn();
-
-            if (!isTVOn)
+            if (!IsTVOn())
             {
                 // TV is off, pause any playback
                 if (TVController.Instance.IsPlaying())
@@ -89,73 +93,95 @@ namespace YoutubeOnTV
                 return;
             }
 
-            // TV is on - decide what to play (only host manages this)
-            if (LNetworkUtils.IsHostOrServer && !IsLoadingVideo)
-            {
-                if (!VideoQueue.IsEmpty())
-                {
-                    // Queue has videos - switch from fallback if needed
-                    if (isPlayingFallback)
-                    {
-                        logger.LogInfo("Switching from fallback to queue video");
-                        TVController.Instance.Stop();
-                        isPlayingFallback = false;
-                        hasStartedCurrentVideo = false;
-                    }
+            // Only the host decides what plays; clients follow its broadcasts.
+            if (!LNetworkUtils.IsHostOrServer)
+                return;
 
-                    // Auto-play next video when queue has items and nothing is playing
-                    if (!hasStartedCurrentVideo && !TVController.Instance.IsPlaying())
-                    {
-                        PlayNextFromQueue();
-                    }
-                }
-                else
-                {
-                    // Queue is empty - play fallback if not already playing
-                    if (!isPlayingFallback && !TVController.Instance.IsPlaying())
-                    {
-                        PlayFallbackVideo();
-                    }
-                }
+            AdvancePlayback();
+            SyncPlaybackToClients();
+        }
+
+        /// <summary>
+        /// The single place that decides what the TV plays next (host only).
+        /// </summary>
+        private void AdvancePlayback()
+        {
+            if (IsLoadingVideo)
+                return;
+
+            // A queued video interrupts the fallback, so this has to come before the busy check.
+            if (isPlayingFallback && !VideoQueue.IsEmpty())
+            {
+                logger.LogInfo("Switching from fallback to queue video");
+                TVController.Instance.Stop();
+                isPlayingFallback = false;
             }
 
-            // Host periodically syncs playback position to all clients
-            if (LNetworkUtils.IsHostOrServer && TVController.Instance.IsPlaying() && !isPlayingFallback)
-            {
-                if (Time.time - lastSyncTime >= SYNC_INTERVAL)
-                {
-                    lastSyncTime = Time.time;
-                    float currentTime = (float)TVController.Instance.videoPlayer.time;
+            if (TVController.Instance.IsBusy())
+                return;
 
-                    if (NetworkHandler.Instance != null)
+            if (currentInput != null)
+            {
+                if (retryAtTime > 0f)
+                {
+                    if (Time.time >= retryAtTime)
                     {
-                        NetworkHandler.Instance.BroadcastPlaybackTime(currentTime);
+                        retryAtTime = 0f;
+                        LoadCurrentVideo();
                     }
+                    return;
                 }
+
+                // Nothing playing, nothing pending: the current entry is done with.
+                ClearCurrentVideo();
+            }
+
+            if (!VideoQueue.IsEmpty())
+            {
+                PlayNextFromQueue();
+            }
+            else if (!isPlayingFallback)
+            {
+                PlayFallbackVideo();
+            }
+        }
+
+        private void SyncPlaybackToClients()
+        {
+            if (isPlayingFallback || !TVController.Instance.IsPlaying())
+                return;
+
+            if (Time.time - lastSyncTime < SYNC_INTERVAL)
+                return;
+
+            lastSyncTime = Time.time;
+
+            if (NetworkHandler.Instance != null)
+            {
+                NetworkHandler.Instance.BroadcastPlaybackTime((float)TVController.Instance.videoPlayer.time);
             }
         }
 
         /// <summary>
-        /// Called from chat command to skip current video
+        /// Called from the terminal command to skip the current video
         /// </summary>
         public void OnSkipRequested()
         {
-            skipRequested = true;
-            hasStartedCurrentVideo = false; // Allow next video to start
-            isPlayingFallback = false; // Reset fallback flag
+            ClearCurrentVideo();
+            isPlayingFallback = false;
 
             if (TVController.Instance != null)
             {
                 TVController.Instance.Stop();
             }
 
-            // The Update loop will automatically start the next video
+            // AdvancePlayback picks the next video on the host's next frame.
         }
 
         /// <summary>
-        /// Plays the next video from the queue
+        /// Takes the next video off the queue and starts loading it (host only)
         /// </summary>
-        public void PlayNextFromQueue()
+        private void PlayNextFromQueue()
         {
             if (VideoQueue.IsEmpty())
             {
@@ -169,100 +195,122 @@ namespace YoutubeOnTV
                 return;
             }
 
-            string input = VideoQueue.Next();
-            logger.LogInfo($"Loading video from queue: {input}");
+            currentInput = VideoQueue.Dequeue();
+            currentRetries = 0;
+            retryAtTime = 0f;
+
+            // Keep every client's queue in step with the host's.
+            if (NetworkHandler.Instance != null)
+            {
+                NetworkHandler.Instance.BroadcastRemoveFromQueue(currentInput);
+            }
+
+            LoadCurrentVideo();
+        }
+
+        private void LoadCurrentVideo()
+        {
+            string input = currentInput;
+            logger.LogInfo($"Loading video: {input}");
 
             IsLoadingVideo = true;
-            hasStartedCurrentVideo = true; // Mark that we've started this video
-            skipRequested = false;
 
-            // Use VideoStreamer to resolve the URL
             VideoStreamer.Instance.GetVideoUrl(input, (resolvedUrl) =>
             {
                 IsLoadingVideo = false;
 
-                if (string.IsNullOrEmpty(resolvedUrl))
+                // A skip or clear may have moved on while yt-dlp was still running.
+                if (currentInput != input)
                 {
-                    logger.LogError($"Failed to resolve video URL: {input}");
-
-                    // Check if we've exceeded retry limit
-                    bool maxRetriesExceeded = VideoQueue.IncrementRetry(input);
-
-                    if (maxRetriesExceeded)
-                    {
-                        // Remove the failed video from queue
-                        string removed = VideoQueue.RemoveCurrent();
-                        logger.LogError($"Removing video from queue after max retries: {removed}");
-
-                        // Show error message to user
-                        if (HUDManager.Instance != null)
-                        {
-                            HUDManager.Instance.DisplayTip("Video Error",
-                                "Failed to load video. Removed from queue.",
-                                true, false, "LC_Tip1");
-                        }
-
-                        hasStartedCurrentVideo = false;
-
-                        // Try next video in queue (if any)
-                        if (!VideoQueue.IsEmpty())
-                        {
-                            Invoke(nameof(PlayNextFromQueue), 1f);
-                        }
-                    }
-                    else
-                    {
-                        // Retry after a short delay
-                        logger.LogInfo("Retrying video after delay...");
-                        hasStartedCurrentVideo = false;
-                        Invoke(nameof(PlayNextFromQueue), 3f);
-                    }
+                    logger.LogInfo("Video changed while loading, discarding resolved URL");
                     return;
                 }
 
-                // Success - reset retry count for this video
-                VideoQueue.ResetRetry(input);
+                if (string.IsNullOrEmpty(resolvedUrl))
+                {
+                    OnCurrentVideoFailed($"Failed to resolve video URL: {input}");
+                    return;
+                }
+
                 CurrentVideoUrl = resolvedUrl;
                 logger.LogInfo("Video URL resolved successfully!");
 
-                // Host tells TV to play this video AND broadcasts to all clients
-                if (TVController.Instance != null)
-                {
-                    TVController.Instance.PlayVideo(resolvedUrl);
-
-                    // Host broadcasts to all clients to play this video
-                    if (LNetworkUtils.IsHostOrServer && NetworkHandler.Instance != null)
-                    {
-                        NetworkHandler.Instance.BroadcastPlayVideo(resolvedUrl, 0f);
-                    }
-                }
-                else
+                if (TVController.Instance == null)
                 {
                     logger.LogError("TVController not found!");
+                    return;
+                }
+
+                TVController.Instance.PlayVideo(resolvedUrl);
+
+                if (NetworkHandler.Instance != null)
+                {
+                    NetworkHandler.Instance.BroadcastPlayVideo(resolvedUrl, 0f);
                 }
             });
         }
 
+        private void OnCurrentVideoFailed(string reason)
+        {
+            logger.LogError(reason);
+
+            // A half-dead player would keep IsBusy() true and stall the retry timer.
+            if (TVController.Instance != null)
+            {
+                TVController.Instance.Stop();
+            }
+
+            CurrentVideoUrl = null;
+            currentRetries++;
+
+            if (currentRetries < MAX_ATTEMPTS)
+            {
+                logger.LogInfo($"Retrying in {RETRY_DELAY}s (attempt {currentRetries + 1}/{MAX_ATTEMPTS})");
+                retryAtTime = Time.time + RETRY_DELAY;
+                return;
+            }
+
+            logger.LogError($"Giving up on video after {currentRetries} attempts: {currentInput}");
+            ClearCurrentVideo();
+
+            if (HUDManager.Instance != null)
+            {
+                HUDManager.Instance.DisplayTip("Video Error",
+                    "Failed to load video. Removed from queue.",
+                    true, false, "LC_Tip1");
+            }
+        }
+
+        private void ClearCurrentVideo()
+        {
+            currentInput = null;
+            currentRetries = 0;
+            retryAtTime = 0f;
+            CurrentVideoUrl = null;
+        }
+
         /// <summary>
-        /// Called when TV finishes playing a video
+        /// Called when the TV finishes playing a video
         /// </summary>
         public void OnVideoFinished()
         {
             logger.LogInfo("Video finished playing");
-            CurrentVideoUrl = null;
-            hasStartedCurrentVideo = false; // Allow next video to start
-            isPlayingFallback = false; // Reset fallback flag
 
-            // Auto-advance to next video in queue, or return to fallback
-            if (!VideoQueue.IsEmpty() && !skipRequested)
+            // The fallback is not looped by the player, so every machine restarts its own copy.
+            if (isPlayingFallback)
             {
-                Invoke(nameof(PlayNextFromQueue), 1f);
+                isPlayingFallback = false;
+                StartFallbackPlayback();
+                return;
             }
-            else
-            {
-                // Queue is empty, fallback will be triggered by Update loop
-                logger.LogInfo("Queue empty, will return to fallback video");
-            }
+
+            CurrentVideoUrl = null;
+
+            if (!LNetworkUtils.IsHostOrServer)
+                return;
+
+            ClearCurrentVideo();
+            // AdvancePlayback plays the next queue entry, or the fallback, next frame.
         }
 
         /// <summary>
@@ -272,44 +320,15 @@ namespace YoutubeOnTV
         {
             logger.LogError($"Video playback error: {errorMessage}");
 
-            if (VideoQueue.IsEmpty())
-            {
-                logger.LogInfo("No videos in queue to retry");
+            // Clients wait for the host to tell them what to play instead.
+            if (!LNetworkUtils.IsHostOrServer)
                 return;
-            }
 
-            string currentVideo = VideoQueue.Current();
-            bool maxRetriesExceeded = VideoQueue.IncrementRetry(currentVideo);
+            // A broken fallback would otherwise be retried every frame.
+            if (isPlayingFallback || currentInput == null)
+                return;
 
-            if (maxRetriesExceeded)
-            {
-                // Remove the failed video from queue
-                string removed = VideoQueue.RemoveCurrent();
-                logger.LogError($"Removing video from queue after playback errors: {removed}");
-
-                // Reset flags
-                hasStartedCurrentVideo = false;
-                isPlayingFallback = false;
-                CurrentVideoUrl = null;
-                IsLoadingVideo = false;
-
-                // Try next video in queue (if any)
-                if (!VideoQueue.IsEmpty())
-                {
-                    Invoke(nameof(PlayNextFromQueue), 1f);
-                }
-            }
-            else
-            {
-                // Retry the same video after a delay
-                logger.LogInfo("Retrying video after playback error...");
-                hasStartedCurrentVideo = false;
-                isPlayingFallback = false;
-                CurrentVideoUrl = null;
-                IsLoadingVideo = false;
-
-                Invoke(nameof(PlayNextFromQueue), 3f);
-            }
+            OnCurrentVideoFailed($"Playback failed for: {currentInput}");
         }
 
         /// <summary>
@@ -328,28 +347,32 @@ namespace YoutubeOnTV
         }
 
         /// <summary>
-        /// Plays the fallback video file (looping)
+        /// Plays the fallback video and tells clients to do the same (host only)
         /// </summary>
         private void PlayFallbackVideo()
         {
+            StartFallbackPlayback();
+
+            if (LNetworkUtils.IsHostOrServer && NetworkHandler.Instance != null)
+            {
+                NetworkHandler.Instance.BroadcastPlayFallback();
+            }
+        }
+
+        private void StartFallbackPlayback()
+        {
+            if (TVController.Instance == null)
+            {
+                logger.LogError("Cannot play fallback: TVController not found!");
+                return;
+            }
+
             string fallbackPath = GetFallbackVideoPath();
             logger.LogInfo($"Playing fallback video: {fallbackPath}");
 
-            if (TVController.Instance != null)
-            {
-                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: false);
-                isPlayingFallback = true;
-
-                // Host broadcasts to all clients to play fallback
-                if (LNetworkUtils.IsHostOrServer && NetworkHandler.Instance != null)
-                {
-                    NetworkHandler.Instance.BroadcastPlayFallback();
-                }
-            }
-            else
-            {
-                logger.LogError("Cannot play fallback: TVController not found!");
-            }
+            TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: false);
+            isPlayingFallback = true;
+            CurrentVideoUrl = null;
         }
 
         /// <summary>
@@ -359,22 +382,11 @@ namespace YoutubeOnTV
         {
             logger.LogInfo("TV powered on - checking what to play");
 
-            // Check if there's a paused video to resume
+            // Resume a video that was paused when the TV was switched off.
             if (TVController.Instance != null && TVController.Instance.IsPaused())
             {
                 logger.LogInfo("Resuming paused video");
                 TVController.Instance.Resume();
-            }
-            else if (!VideoQueue.IsEmpty())
-            {
-                logger.LogInfo("Queue has videos, will play from queue");
-                // Update loop will handle playing from queue
-                hasStartedCurrentVideo = false;
-            }
-            else
-            {
-                logger.LogInfo("Queue is empty, will play fallback");
-                // Update loop will handle playing fallback
             }
         }
 
@@ -383,14 +395,13 @@ namespace YoutubeOnTV
         /// </summary>
         public void PlayVideoFromNetwork(string url, float startTime)
         {
-            logger.LogInfo($"Playing video from network: {url} at {startTime}s");
-
             // Don't let clients trigger this - only respond to host's broadcast
             if (LNetworkUtils.IsHostOrServer)
                 return;
 
+            logger.LogInfo($"Playing video from network: {url} at {startTime}s");
+
             CurrentVideoUrl = url;
-            hasStartedCurrentVideo = true;
             isPlayingFallback = false;
 
             if (TVController.Instance != null)
@@ -452,21 +463,12 @@ namespace YoutubeOnTV
         /// </summary>
         public void PlayFallbackFromNetwork()
         {
-            logger.LogInfo("Playing fallback from network");
-
             // Don't let clients trigger this - only respond to host's broadcast
             if (LNetworkUtils.IsHostOrServer)
                 return;
 
-            string fallbackPath = GetFallbackVideoPath();
-
-            if (TVController.Instance != null)
-            {
-                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: false);
-                isPlayingFallback = true;
-                hasStartedCurrentVideo = false;
-                CurrentVideoUrl = null;
-            }
+            logger.LogInfo("Playing fallback from network");
+            StartFallbackPlayback();
         }
 
         /// <summary>
@@ -502,11 +504,11 @@ namespace YoutubeOnTV
         /// </summary>
         public void ApplyTVStateFromNetwork(TVStateData state)
         {
-            logger.LogInfo($"Applying TV state - TVOn: {state.isTVOn}, Fallback: {state.isPlayingFallback}, URL: {state.currentVideoUrl}");
-
             // Don't let host apply network state - they are the source of truth
             if (LNetworkUtils.IsHostOrServer)
                 return;
+
+            logger.LogInfo($"Applying TV state - TVOn: {state.isTVOn}, Fallback: {state.isPlayingFallback}, URL: {state.currentVideoUrl}");
 
             if (TVController.Instance == null)
             {
@@ -533,7 +535,6 @@ namespace YoutubeOnTV
 
                 TVController.Instance.Stop();
                 isPlayingFallback = false;
-                hasStartedCurrentVideo = false;
                 CurrentVideoUrl = null;
                 return;
             }
@@ -548,20 +549,14 @@ namespace YoutubeOnTV
             // TV is on - apply the appropriate state
             if (state.isPlayingFallback)
             {
-                // Play fallback video
                 logger.LogInfo("Syncing to fallback video");
-                string fallbackPath = GetFallbackVideoPath();
-                TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: false);
-                isPlayingFallback = true;
-                hasStartedCurrentVideo = false;
-                CurrentVideoUrl = null;
+                StartFallbackPlayback();
             }
             else if (!string.IsNullOrEmpty(state.currentVideoUrl))
             {
                 // Play the current video at the specified time
                 logger.LogInfo($"Syncing to video: {state.currentVideoUrl} at {state.currentPlaybackTime}s");
                 CurrentVideoUrl = state.currentVideoUrl;
-                hasStartedCurrentVideo = true;
                 isPlayingFallback = false;
 
                 TVController.Instance.PlayVideo(state.currentVideoUrl);
@@ -578,7 +573,6 @@ namespace YoutubeOnTV
                 logger.LogInfo("TV is on but nothing is playing");
                 TVController.Instance.Stop();
                 isPlayingFallback = false;
-                hasStartedCurrentVideo = false;
                 CurrentVideoUrl = null;
             }
         }

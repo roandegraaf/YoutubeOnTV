@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.7] - 2026-08-23
+
+### Changed
+- Fixed the queue not advancing to the next video automatically
+- Videos are now removed from the queue when they start playing
+- Fixed `tv skip` refusing to skip when the queue was empty
+- Fixed clients resolving their own videos instead of following the host
+
 ## [0.2.6] - 2025-11-23
 
 ### Changed

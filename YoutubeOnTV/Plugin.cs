@@ -1,4 +1,4 @@
-﻿using BepInEx;
+using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
@@ -8,7 +8,7 @@ using static TerminalApi.Events.Events;
 
 namespace YoutubeOnTV
 {
-    [BepInPlugin("com.roandegraaf.youtubeontv", "YoutubeOnTV", "0.2.3")]
+    [BepInPlugin("com.roandegraaf.youtubeontv", "YoutubeOnTV", "0.2.7")]
     [BepInDependency("atomic.terminalapi")]
     [BepInDependency("LethalNetworkAPI")]
     public class YoutubeOnTVBase : BaseUnityPlugin
@@ -187,26 +187,18 @@ namespace YoutubeOnTV
             // Handle "tv skip"
             else if (input == "tv skip" || input == "skip tv")
             {
-                if (VideoQueue.IsEmpty())
+                // The playing video is no longer in the queue, so an empty queue
+                // still means there is something to skip.
+                if (NetworkHandler.Instance != null)
                 {
-                    e.ReturnedNode = CreateTerminalNode(
-                        "Queue is empty. Nothing to skip.\n\n",
-                        true
-                    );
+                    NetworkHandler.Instance.RequestSkipVideo();
                 }
-                else
-                {
-                    if (NetworkHandler.Instance != null)
-                    {
-                        NetworkHandler.Instance.RequestSkipVideo();
-                    }
 
-                    e.ReturnedNode = CreateTerminalNode(
-                        $"Skipped to next video.\n" +
-                        $"Queue size: {VideoQueue.Count()}\n\n",
-                        true
-                    );
-                }
+                e.ReturnedNode = CreateTerminalNode(
+                    $"Skipped current video.\n" +
+                    $"Videos remaining: {VideoQueue.Count()}\n\n",
+                    true
+                );
             }
             // Handle "tv queue"
             else if (input == "tv queue" || input == "queue tv")

@@ -12,6 +12,7 @@ namespace YoutubeOnTV
         private LNetworkMessage<string> addVideoMessage;
         private LNetworkEvent skipVideoEvent;
         private LNetworkEvent clearQueueEvent;
+        private LNetworkMessage<string> removeFromQueueMessage;
         private LNetworkMessage<VideoPlayData> playVideoMessage;
         private LNetworkMessage<float> syncPlaybackMessage;
         private LNetworkEvent playFallbackEvent;
@@ -56,6 +57,12 @@ namespace YoutubeOnTV
                 identifier: "YoutubeOnTV_Clear",
                 onServerReceived: OnServerReceivedClear,
                 onClientReceived: OnClientReceivedClear
+            );
+
+            // Remove a video from the queue (host broadcasts to clients when it starts playing one)
+            removeFromQueueMessage = LNetworkMessage<string>.Connect(
+                identifier: "YoutubeOnTV_RemoveFromQueue",
+                onClientReceived: OnClientReceivedRemoveFromQueue
             );
 
             // Play video (host broadcasts to clients)
@@ -142,6 +149,19 @@ namespace YoutubeOnTV
                 // Send to server
                 clearQueueEvent.InvokeServer();
             }
+        }
+
+        /// <summary>
+        /// Tell every client to drop a video from its queue because the host started playing it (host only)
+        /// </summary>
+        public void BroadcastRemoveFromQueue(string input)
+        {
+            if (!LNetworkUtils.IsHostOrServer)
+                return;
+
+            removeFromQueueMessage.SendClients(input);
+
+            YoutubeOnTVBase.Instance.mls.LogInfo($"Broadcasting queue removal: {input}");
         }
 
         /// <summary>
@@ -264,11 +284,19 @@ namespace YoutubeOnTV
             VideoQueue.Add(input);
         }
 
+        private void OnClientReceivedRemoveFromQueue(string input)
+        {
+            // The host already removed it locally before broadcasting.
+            if (LNetworkUtils.IsHostOrServer)
+                return;
+
+            YoutubeOnTVBase.Instance.mls.LogInfo($"[Client] Removing video from queue: {input}");
+            VideoQueue.RemoveFirstMatch(input);
+        }
+
         private void OnClientReceivedSkip()
         {
             YoutubeOnTVBase.Instance.mls.LogInfo($"[Client] Skipping video");
-
-            VideoQueue.Skip();
 
             if (VideoManager.Instance != null)
             {
