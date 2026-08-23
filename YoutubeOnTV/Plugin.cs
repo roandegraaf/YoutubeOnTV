@@ -8,7 +8,7 @@ using static TerminalApi.Events.Events;
 
 namespace YoutubeOnTV
 {
-    [BepInPlugin("com.roandegraaf.youtubeontv", "YoutubeOnTV", "0.2.7")]
+    [BepInPlugin("com.roandegraaf.youtubeontv", "YoutubeOnTV", "0.2.8")]
     [BepInDependency("atomic.terminalapi")]
     [BepInDependency("LethalNetworkAPI")]
     public class YoutubeOnTVBase : BaseUnityPlugin
