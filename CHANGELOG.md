@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.11] - 2026-08-27
+
+### Changed
+- Video is now requested at 480p instead of 720p60, matching the TV screen's actual resolution. The 720p stream was five times the download for no visible gain and would not open at all.
+
+## [0.2.10] - 2026-08-27
+
+### Changed
+- Fixed videos playing with picture but no sound. YouTube is retiring the pre-muxed formats the mod relied on, and yt-dlp was quietly falling back to a video-only stream. When no combined format exists the TV now plays the matching audio stream alongside the video.
+- Video is now requested as H.264 instead of whatever codec ranked best, since Unity cannot be relied on to decode AV1.
+- Fixed the fallback video not being found when the plugin folder is not named exactly "YoutubeOnTV" (r2modman installs it as "<Author>-YoutubeOnTV")
+
 ## [0.2.8] - 2026-08-23
 
 ### Changed

@@ -1,4 +1,4 @@
-using BepInEx;
+﻿using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
@@ -8,7 +8,7 @@ using static TerminalApi.Events.Events;
 
 namespace YoutubeOnTV
 {
-    [BepInPlugin("com.roandegraaf.youtubeontv", "YoutubeOnTV", "0.2.8")]
+    [BepInPlugin("com.roandegraaf.youtubeontv", "YoutubeOnTV", "0.2.11")]
     [BepInDependency("atomic.terminalapi")]
     [BepInDependency("LethalNetworkAPI")]
     public class YoutubeOnTVBase : BaseUnityPlugin

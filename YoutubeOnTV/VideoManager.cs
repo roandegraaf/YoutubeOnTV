@@ -1,5 +1,5 @@
 using System.IO;
-using BepInEx;
+using System.Reflection;
 using BepInEx.Logging;
 using UnityEngine;
 using LethalNetworkAPI;
@@ -12,6 +12,7 @@ namespace YoutubeOnTV
         public static VideoManager Instance { get; private set; }
 
         public string CurrentVideoUrl { get; private set; }
+        public string CurrentAudioUrl { get; private set; }
         public bool IsLoadingVideo { get; private set; }
 
         private ManualLogSource logger;
@@ -30,10 +31,12 @@ namespace YoutubeOnTV
         private float lastSyncTime = 0f;
         private const float SYNC_INTERVAL = 2f; // Sync every 2 seconds
 
-        // Path to fallback video file (will be resolved to absolute path)
+        // Derived from the assembly location because mod managers are free to name the
+        // plugin folder however they like (r2modman uses "<Author>-YoutubeOnTV").
         private static string GetFallbackVideoPath()
         {
-            return Path.Combine(Paths.PluginPath, "YoutubeOnTV", "fallback.mp4");
+            string pluginDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            return Path.Combine(pluginDir, "fallback.mp4");
         }
 
         private void Awake()
@@ -215,7 +218,7 @@ namespace YoutubeOnTV
 
             IsLoadingVideo = true;
 
-            VideoStreamer.Instance.GetVideoUrl(input, (resolvedUrl) =>
+            VideoStreamer.Instance.GetVideoUrl(input, (streams) =>
             {
                 IsLoadingVideo = false;
 
@@ -226,13 +229,14 @@ namespace YoutubeOnTV
                     return;
                 }
 
-                if (string.IsNullOrEmpty(resolvedUrl))
+                if (!streams.IsValid)
                 {
                     OnCurrentVideoFailed($"Failed to resolve video URL: {input}");
                     return;
                 }
 
-                CurrentVideoUrl = resolvedUrl;
+                CurrentVideoUrl = streams.VideoUrl;
+                CurrentAudioUrl = streams.AudioUrl;
                 logger.LogInfo("Video URL resolved successfully!");
 
                 if (TVController.Instance == null)
@@ -241,11 +245,11 @@ namespace YoutubeOnTV
                     return;
                 }
 
-                TVController.Instance.PlayVideo(resolvedUrl);
+                TVController.Instance.PlayVideo(streams.VideoUrl, streams.AudioUrl);
 
                 if (NetworkHandler.Instance != null)
                 {
-                    NetworkHandler.Instance.BroadcastPlayVideo(resolvedUrl, 0f);
+                    NetworkHandler.Instance.BroadcastPlayVideo(streams.VideoUrl, streams.AudioUrl, 0f);
                 }
             });
         }
@@ -261,6 +265,7 @@ namespace YoutubeOnTV
             }
 
             CurrentVideoUrl = null;
+            CurrentAudioUrl = null;
             currentRetries++;
 
             if (currentRetries < MAX_ATTEMPTS)
@@ -287,6 +292,7 @@ namespace YoutubeOnTV
             currentRetries = 0;
             retryAtTime = 0f;
             CurrentVideoUrl = null;
+            CurrentAudioUrl = null;
         }
 
         /// <summary>
@@ -305,6 +311,7 @@ namespace YoutubeOnTV
             }
 
             CurrentVideoUrl = null;
+            CurrentAudioUrl = null;
 
             if (!LNetworkUtils.IsHostOrServer)
                 return;
@@ -373,6 +380,7 @@ namespace YoutubeOnTV
             TVController.Instance.PlayLocalVideo(fallbackPath, shouldLoop: false);
             isPlayingFallback = true;
             CurrentVideoUrl = null;
+            CurrentAudioUrl = null;
         }
 
         /// <summary>
@@ -393,7 +401,7 @@ namespace YoutubeOnTV
         /// <summary>
         /// Called by NetworkHandler when receiving a play video command from host
         /// </summary>
-        public void PlayVideoFromNetwork(string url, float startTime)
+        public void PlayVideoFromNetwork(string url, string audioUrl, float startTime)
         {
             // Don't let clients trigger this - only respond to host's broadcast
             if (LNetworkUtils.IsHostOrServer)
@@ -402,11 +410,12 @@ namespace YoutubeOnTV
             logger.LogInfo($"Playing video from network: {url} at {startTime}s");
 
             CurrentVideoUrl = url;
+            CurrentAudioUrl = audioUrl;
             isPlayingFallback = false;
 
             if (TVController.Instance != null)
             {
-                TVController.Instance.PlayVideo(url);
+                TVController.Instance.PlayVideo(url, audioUrl);
 
                 // Set playback position after video is prepared
                 if (startTime > 0f)
@@ -435,7 +444,7 @@ namespace YoutubeOnTV
             if (timeDiff > 1f)
             {
                 logger.LogInfo($"Syncing playback time: {currentTime}s -> {time}s (diff: {timeDiff}s)");
-                TVController.Instance.videoPlayer.time = time;
+                TVController.Instance.Seek(time);
             }
         }
 
@@ -453,7 +462,7 @@ namespace YoutubeOnTV
             // Set the playback position
             if (TVController.Instance != null)
             {
-                TVController.Instance.videoPlayer.time = startTime;
+                TVController.Instance.Seek(startTime);
                 logger.LogInfo($"Set playback start time to {startTime}s");
             }
         }
@@ -481,6 +490,7 @@ namespace YoutubeOnTV
                 isTVOn = IsTVOn(),
                 isPlayingFallback = isPlayingFallback,
                 currentVideoUrl = CurrentVideoUrl,
+                currentAudioUrl = CurrentAudioUrl,
                 currentPlaybackTime = 0f,
                 isPlaying = false
             };
@@ -536,6 +546,7 @@ namespace YoutubeOnTV
                 TVController.Instance.Stop();
                 isPlayingFallback = false;
                 CurrentVideoUrl = null;
+                CurrentAudioUrl = null;
                 return;
             }
 
@@ -557,9 +568,10 @@ namespace YoutubeOnTV
                 // Play the current video at the specified time
                 logger.LogInfo($"Syncing to video: {state.currentVideoUrl} at {state.currentPlaybackTime}s");
                 CurrentVideoUrl = state.currentVideoUrl;
+                CurrentAudioUrl = state.currentAudioUrl;
                 isPlayingFallback = false;
 
-                TVController.Instance.PlayVideo(state.currentVideoUrl);
+                TVController.Instance.PlayVideo(state.currentVideoUrl, state.currentAudioUrl);
 
                 // Set playback position after video is prepared
                 if (state.currentPlaybackTime > 0f)
@@ -574,6 +586,7 @@ namespace YoutubeOnTV
                 TVController.Instance.Stop();
                 isPlayingFallback = false;
                 CurrentVideoUrl = null;
+                CurrentAudioUrl = null;
             }
         }
     }

@@ -103,16 +103,16 @@ namespace YoutubeOnTV
         }
 
         /// <summary>
-        /// Resolves a YouTube URL or search query to a direct video URL
+        /// Resolves a YouTube URL or search query to direct stream URLs
         /// </summary>
         /// <param name="input">YouTube URL, video ID, or search term</param>
-        /// <param name="onUrlFound">Callback with the resolved URL (null if failed)</param>
-        public void GetVideoUrl(string input, Action<string> onUrlFound)
+        /// <param name="onResolved">Callback with the resolved streams (VideoUrl null if failed)</param>
+        public void GetVideoUrl(string input, Action<ResolvedStreams> onResolved)
         {
-            StartCoroutine(GetVideoUrlCoroutine(input, onUrlFound));
+            StartCoroutine(GetVideoUrlCoroutine(input, onResolved));
         }
 
-        private IEnumerator GetVideoUrlCoroutine(string input, Action<string> onUrlFound)
+        private IEnumerator GetVideoUrlCoroutine(string input, Action<ResolvedStreams> onResolved)
         {
             // Wait for initialization if not ready
             while (!_isInitialized)
@@ -146,13 +146,18 @@ namespace YoutubeOnTV
                 }
             };
 
-            // Configure options for format selection and URL extraction
-            // Unity VideoPlayer needs a single URL with both audio and video (pre-muxed)
-            // 18 = 360p MP4 with audio (common pre-muxed format)
-            // 22 = 720p MP4 with audio (fallback)
+            // 18/22 are the pre-muxed formats YouTube is retiring per-video; once they are
+            // gone a bare "mp4" selector silently degrades to a video-only format, which left
+            // the TV playing in silence. The later branches ask for an explicit avc1+AAC pair
+            // instead, avc1 because Unity's VideoPlayer cannot be relied on to decode AV1.
+            // 480p is capped to the TV's render texture (roughly 809x455); the 720p60 stream
+            // it used to pick was five times the bytes for no visible gain.
             var options = new OptionSet()
             {
-                Format = "18/22/(mp4)[height<=480]/worst",
+                Format = "18/22"
+                    + "/bv*[vcodec^=avc1][height<=480]+ba[acodec^=mp4a][audio_channels<=2]"
+                    + "/bv*[height<=480]+ba"
+                    + "/b",
                 GetUrl = true  // This tells yt-dlp to output the URL instead of downloading
             };
 
@@ -169,7 +174,7 @@ namespace YoutubeOnTV
             catch (Exception ex)
             {
                 _logger.LogError($"Failed to start yt-dlp process: {ex.Message}");
-                onUrlFound(null);
+                onResolved(default(ResolvedStreams));
                 _isResolving = false;
                 yield break;
             }
@@ -186,7 +191,7 @@ namespace YoutubeOnTV
             if (processTask.IsFaulted)
             {
                 _logger.LogError($"yt-dlp process failed: {processTask.Exception?.GetBaseException().Message}");
-                onUrlFound(null);
+                onResolved(default(ResolvedStreams));
                 _isResolving = false;
                 yield break;
             }
@@ -210,24 +215,38 @@ namespace YoutubeOnTV
                 {
                     _logger.LogError($"Error: {error}");
                 }
-                onUrlFound(null);
+                onResolved(default(ResolvedStreams));
             }
             else
             {
-                // yt-dlp returns the URL on stdout
+                // A muxed format prints one URL; a video+audio pair prints the video URL
+                // first and the audio URL second.
                 string[] urls = output.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
 
                 if (urls.Length > 0)
                 {
-                    string videoUrl = urls[0].Trim();
-                    _logger.LogInfo($"Video URL resolved successfully!");
-                    _logger.LogInfo($"URL: {videoUrl.Substring(0, Math.Min(100, videoUrl.Length))}...");
-                    onUrlFound(videoUrl);
+                    var streams = new ResolvedStreams
+                    {
+                        VideoUrl = urls[0].Trim(),
+                        AudioUrl = urls.Length > 1 ? urls[1].Trim() : null
+                    };
+
+                    _logger.LogInfo(streams.HasSeparateAudio
+                        ? "Resolved a separate video and audio stream."
+                        : "Resolved a single stream carrying both video and audio.");
+                    _logger.LogInfo($"Video URL: {streams.VideoUrl.Substring(0, Math.Min(100, streams.VideoUrl.Length))}...");
+
+                    if (urls.Length > 2)
+                    {
+                        _logger.LogWarning($"yt-dlp returned {urls.Length} URLs, using the first two.");
+                    }
+
+                    onResolved(streams);
                 }
                 else
                 {
                     _logger.LogError("yt-dlp returned empty output");
-                    onUrlFound(null);
+                    onResolved(default(ResolvedStreams));
                 }
             }
 
@@ -237,6 +256,22 @@ namespace YoutubeOnTV
         public bool IsResolving()
         {
             return _isResolving;
+        }
+    }
+
+    public struct ResolvedStreams
+    {
+        public string VideoUrl;
+        public string AudioUrl;
+
+        public bool IsValid
+        {
+            get { return !string.IsNullOrEmpty(VideoUrl); }
+        }
+
+        public bool HasSeparateAudio
+        {
+            get { return !string.IsNullOrEmpty(AudioUrl); }
         }
     }
 }

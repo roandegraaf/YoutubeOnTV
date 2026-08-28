@@ -167,7 +167,7 @@ namespace YoutubeOnTV
         /// <summary>
         /// Broadcast video playback to all clients (host only)
         /// </summary>
-        public void BroadcastPlayVideo(string url, float startTime)
+        public void BroadcastPlayVideo(string url, string audioUrl, float startTime)
         {
             if (!LNetworkUtils.IsHostOrServer)
             {
@@ -175,7 +175,7 @@ namespace YoutubeOnTV
                 return;
             }
 
-            var data = new VideoPlayData { url = url, startTime = startTime };
+            var data = new VideoPlayData { url = url, audioUrl = audioUrl, startTime = startTime };
             playVideoMessage.SendClients(data);
 
             YoutubeOnTVBase.Instance.mls.LogInfo($"Broadcasting play video: {url} at {startTime}s");
@@ -322,7 +322,7 @@ namespace YoutubeOnTV
 
             if (VideoManager.Instance != null)
             {
-                VideoManager.Instance.PlayVideoFromNetwork(data.url, data.startTime);
+                VideoManager.Instance.PlayVideoFromNetwork(data.url, data.audioUrl, data.startTime);
             }
         }
 
@@ -360,6 +360,7 @@ namespace YoutubeOnTV
     public struct VideoPlayData
     {
         public string url;
+        public string audioUrl;
         public float startTime;
     }
 
@@ -370,6 +371,7 @@ namespace YoutubeOnTV
         public bool isTVOn;
         public bool isPlayingFallback;
         public string currentVideoUrl;
+        public string currentAudioUrl;
         public float currentPlaybackTime;
         public bool isPlaying;
     }

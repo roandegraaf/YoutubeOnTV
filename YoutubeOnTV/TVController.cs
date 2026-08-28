@@ -9,12 +9,23 @@ namespace YoutubeOnTV
         public static TVController Instance { get; private set; }
 
         public VideoPlayer videoPlayer; // Made public for network sync access
+        private VideoPlayer audioPlayer; // Plays the audio-only stream when it is served separately
         private VideoPlayer vanillaVideoPlayer; // Reference to vanilla TV's VideoPlayer
         private RenderTexture renderTexture; // The TV screen's render texture
         private AudioSource tvAudioSource; // TV's existing AudioSource
         private TVScript tvScript;
         private ManualLogSource logger;
         private bool isPreparing;
+
+        private bool usingSeparateAudio;
+        private bool videoPrepared;
+        private bool audioPrepared;
+        private float audioWaitStartedAt;
+        private float lastAudioResyncAt;
+
+        private const float AUDIO_DRIFT_TOLERANCE = 0.35f;
+        private const float AUDIO_RESYNC_COOLDOWN = 2f;
+        private const float AUDIO_PREPARE_TIMEOUT = 10f;
 
         private void Awake()
         {
@@ -67,6 +78,19 @@ namespace YoutubeOnTV
             videoPlayer.targetTexture = renderTexture;
             logger.LogInfo("Configured VideoPlayer with TV's render texture");
 
+            audioPlayer = gameObject.AddComponent<VideoPlayer>();
+            audioPlayer.playOnAwake = false;
+            audioPlayer.isLooping = false;
+            audioPlayer.source = VideoSource.Url;
+            audioPlayer.skipOnDrop = true;
+            audioPlayer.renderMode = VideoRenderMode.APIOnly;
+            audioPlayer.controlledAudioTrackCount = 1;
+            audioPlayer.audioOutputMode = VideoAudioOutputMode.AudioSource;
+            audioPlayer.SetTargetAudioSource(0, tvAudioSource);
+            audioPlayer.errorReceived -= OnAudioError;
+            audioPlayer.errorReceived += OnAudioError;
+            logger.LogInfo("Created companion VideoPlayer for separate audio streams");
+
             // Replace TVScript's video reference with our custom player
             tvScript.video = videoPlayer;
             logger.LogInfo("Replaced TVScript.video with custom VideoPlayer");
@@ -90,10 +114,40 @@ namespace YoutubeOnTV
             }
         }
 
+        private void Update()
+        {
+            if (!usingSeparateAudio)
+                return;
+
+            if (isPreparing && videoPrepared && !audioPrepared
+                && Time.time - audioWaitStartedAt > AUDIO_PREPARE_TIMEOUT)
+            {
+                logger.LogWarning("Audio stream did not prepare in time, playing video without sound");
+                usingSeparateAudio = false;
+                StartWhenReady();
+                return;
+            }
+
+            if (!videoPlayer.isPlaying || !audioPlayer.isPlaying)
+                return;
+
+            if (Time.time - lastAudioResyncAt < AUDIO_RESYNC_COOLDOWN)
+                return;
+
+            double drift = audioPlayer.time - videoPlayer.time;
+            if (System.Math.Abs(drift) > AUDIO_DRIFT_TOLERANCE)
+            {
+                lastAudioResyncAt = Time.time;
+                audioPlayer.time = videoPlayer.time;
+                logger.LogInfo($"Resynced audio stream ({drift:0.00}s drift)");
+            }
+        }
+
         /// <summary>
-        /// Plays a video from the given URL
+        /// Plays a video from the given URL. Pass an audioUrl when the video URL carries no
+        /// audio track of its own, which is what YouTube serves when no muxed format exists.
         /// </summary>
-        public void PlayVideo(string url)
+        public void PlayVideo(string url, string audioUrl = null)
         {
             if (string.IsNullOrEmpty(url))
             {
@@ -103,24 +157,60 @@ namespace YoutubeOnTV
 
             logger.LogInfo($"Playing video: {url.Substring(0, System.Math.Min(100, url.Length))}...");
 
-            videoPlayer.isLooping = false;
+            BeginPlayback(url, audioUrl, shouldLoop: false);
+        }
+
+        private void BeginPlayback(string url, string audioUrl, bool shouldLoop)
+        {
+            audioPlayer.prepareCompleted -= OnAudioPrepared;
+            audioPlayer.Stop();
+
+            usingSeparateAudio = !string.IsNullOrEmpty(audioUrl);
+            videoPrepared = false;
+            audioPrepared = false;
+            lastAudioResyncAt = 0f;
+
+            videoPlayer.isLooping = shouldLoop;
             videoPlayer.url = url;
 
-            // Subscribe to prepared event to check audio tracks
             videoPlayer.prepareCompleted -= OnVideoPrepared;
             videoPlayer.prepareCompleted += OnVideoPrepared;
 
             isPreparing = true;
             videoPlayer.Prepare();
+
+            if (usingSeparateAudio)
+            {
+                logger.LogInfo("Preparing separate audio stream");
+                audioPlayer.isLooping = shouldLoop;
+                audioPlayer.url = audioUrl;
+                audioPlayer.prepareCompleted += OnAudioPrepared;
+                audioPlayer.Prepare();
+            }
         }
 
         private void OnVideoPrepared(VideoPlayer vp)
         {
-            isPreparing = false;
+            videoPrepared = true;
+            audioWaitStartedAt = Time.time;
 
             logger.LogInfo($"Video prepared! Audio tracks: {vp.audioTrackCount}");
 
-            if (vp.audioTrackCount > 0)
+            // Both players feed the same AudioSource, so the companion has to go if this
+            // stream turned out to carry its own audio.
+            if (usingSeparateAudio && vp.audioTrackCount > 0)
+            {
+                logger.LogInfo("Video stream already carries audio, dropping the companion stream");
+                usingSeparateAudio = false;
+                audioPlayer.prepareCompleted -= OnAudioPrepared;
+                audioPlayer.Stop();
+            }
+
+            if (usingSeparateAudio)
+            {
+                logger.LogInfo("Audio comes from the companion stream");
+            }
+            else if (vp.audioTrackCount > 0)
             {
                 logger.LogInfo($"Audio channels: {vp.GetAudioChannelCount(0)}");
             }
@@ -131,9 +221,55 @@ namespace YoutubeOnTV
 
             logger.LogInfo($"TV AudioSource volume: {tvAudioSource.volume}");
 
-            // Start playback
-            vp.Play();
+            StartWhenReady();
+        }
+
+        private void OnAudioPrepared(VideoPlayer vp)
+        {
+            audioPrepared = true;
+            logger.LogInfo($"Audio stream prepared! Audio tracks: {vp.audioTrackCount}");
+
+            if (vp.audioTrackCount == 0)
+            {
+                logger.LogWarning("Audio stream carries no audio track, playing video without sound");
+                usingSeparateAudio = false;
+            }
+
+            StartWhenReady();
+        }
+
+        private void StartWhenReady()
+        {
+            if (!videoPrepared)
+                return;
+
+            if (usingSeparateAudio && !audioPrepared)
+                return;
+
+            isPreparing = false;
+
+            videoPlayer.Play();
+
+            if (usingSeparateAudio)
+            {
+                audioPlayer.time = videoPlayer.time;
+                audioPlayer.Play();
+            }
+
             logger.LogInfo("Video playback started!");
+        }
+
+        /// <summary>
+        /// Moves both streams to the given playback position
+        /// </summary>
+        public void Seek(double time)
+        {
+            videoPlayer.time = time;
+
+            if (usingSeparateAudio)
+            {
+                audioPlayer.time = time;
+            }
         }
 
         /// <summary>
@@ -144,8 +280,13 @@ namespace YoutubeOnTV
             // Unsubscribe first: a Prepare() already in flight would otherwise start
             // playing the video we just stopped.
             videoPlayer.prepareCompleted -= OnVideoPrepared;
+            audioPlayer.prepareCompleted -= OnAudioPrepared;
             isPreparing = false;
+            usingSeparateAudio = false;
+            videoPrepared = false;
+            audioPrepared = false;
             videoPlayer.Stop();
+            audioPlayer.Stop();
             logger.LogInfo("Video stopped");
         }
 
@@ -157,6 +298,12 @@ namespace YoutubeOnTV
             if (videoPlayer.isPlaying)
             {
                 videoPlayer.Pause();
+
+                if (usingSeparateAudio)
+                {
+                    audioPlayer.Pause();
+                }
+
                 logger.LogInfo("Video paused");
             }
         }
@@ -169,6 +316,13 @@ namespace YoutubeOnTV
             if (!videoPlayer.isPlaying && !string.IsNullOrEmpty(videoPlayer.url))
             {
                 videoPlayer.Play();
+
+                if (usingSeparateAudio)
+                {
+                    audioPlayer.time = videoPlayer.time;
+                    audioPlayer.Play();
+                }
+
                 logger.LogInfo("Video resumed");
             }
         }
@@ -225,16 +379,8 @@ namespace YoutubeOnTV
 
             logger.LogInfo($"Playing local video: {filePath}");
 
-            videoPlayer.isLooping = shouldLoop;
             // Use file:// URL scheme for local videos (required by Unity VideoPlayer)
-            videoPlayer.url = "file://" + filePath;
-
-            // Subscribe to prepared event
-            videoPlayer.prepareCompleted -= OnVideoPrepared;
-            videoPlayer.prepareCompleted += OnVideoPrepared;
-
-            isPreparing = true;
-            videoPlayer.Prepare();
+            BeginPlayback("file://" + filePath, null, shouldLoop);
         }
 
         /// <summary>
@@ -251,6 +397,11 @@ namespace YoutubeOnTV
         private void OnVideoEnd(VideoPlayer vp)
         {
             logger.LogInfo("Video playback completed");
+
+            if (usingSeparateAudio)
+            {
+                audioPlayer.Stop();
+            }
 
             // Only notify VideoManager if video is not looping (looping videos don't trigger this)
             if (!vp.isLooping && VideoManager.Instance != null)
@@ -281,6 +432,18 @@ namespace YoutubeOnTV
                     "Failed to play video. Trying next...",
                     true, false, "LC_Tip1");
             }
+        }
+
+        // A dead audio stream must not take the picture down with it, so this never reaches
+        // VideoManager's retry logic the way OnVideoError does.
+        private void OnAudioError(VideoPlayer vp, string message)
+        {
+            logger.LogWarning($"Audio stream error, playing video without sound: {message}");
+
+            audioPlayer.prepareCompleted -= OnAudioPrepared;
+            usingSeparateAudio = false;
+            audioPrepared = true;
+            StartWhenReady();
         }
     }
 }
