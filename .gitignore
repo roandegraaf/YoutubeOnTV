@@ -54,3 +54,9 @@ dkms.conf
 /YoutubeOnTV/bin
 /YoutubeOnTV/obj
 *.zip
+
+# In-game test run artifacts
+/tests/results
+/tests/*/bin
+/tests/*/obj
+/libs

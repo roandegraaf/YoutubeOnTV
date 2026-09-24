@@ -1,378 +1,242 @@
+using System.Linq;
+using Unity.Netcode;
 using UnityEngine;
 using LethalNetworkAPI;
 using LethalNetworkAPI.Utils;
 
 namespace YoutubeOnTV
 {
+    /// <summary>
+    /// Host-authoritative messaging. Clients send requests to the host; the host applies
+    /// them and broadcasts the result. Videos travel as canonical watch URLs, never as
+    /// stream URLs (IP-locked by YouTube) or file paths.
+    /// </summary>
     public class NetworkHandler : MonoBehaviour
     {
         public static NetworkHandler Instance { get; private set; }
 
-        // Network messages
+        // The "2" marks the download-based protocol; older versions of the mod ignore these.
+        private const string Prefix = "YoutubeOnTV2_";
+
         private LNetworkMessage<string> addVideoMessage;
         private LNetworkEvent skipVideoEvent;
         private LNetworkEvent clearQueueEvent;
         private LNetworkMessage<string> removeFromQueueMessage;
+        private LNetworkMessage<string> loadVideoMessage;
         private LNetworkMessage<VideoPlayData> playVideoMessage;
         private LNetworkMessage<float> syncPlaybackMessage;
         private LNetworkEvent playFallbackEvent;
         private LNetworkEvent requestTVStateEvent;
         private LNetworkMessage<TVStateData> syncTVStateMessage;
 
+        private static bool IsHost => LNetworkUtils.IsHostOrServer;
+
+        // The host applies its own changes directly, so broadcasts skip it. (LethalNetworkAPI's
+        // SendOtherClients is a client-to-client message that onClientReceived never sees.)
+        private static ulong[] OtherClients =>
+            LNetworkUtils.AllConnectedClients.Where(id => id != NetworkManager.Singleton.LocalClientId).ToArray();
+
         private void Awake()
         {
-            if (Instance == null)
+            if (Instance != null)
             {
-                Instance = this;
-                DontDestroyOnLoad(gameObject);
-
-                InitializeNetworkMessages();
-
-                YoutubeOnTVBase.Instance.mls.LogInfo("NetworkHandler initialized with LethalNetworkAPI!");
+                Destroy(this);
+                return;
             }
-            else
-            {
-                Destroy(gameObject);
-            }
+
+            Instance = this;
+
+            addVideoMessage = LNetworkMessage<string>.Connect(Prefix + "AddVideo",
+                onServerReceived: (entry, _) => HostAddVideo(entry),
+                onClientReceived: OnClientReceivedAddVideo);
+
+            skipVideoEvent = LNetworkEvent.Connect(Prefix + "Skip",
+                onServerReceived: _ => HostSkip(),
+                onClientReceived: OnClientReceivedSkip);
+
+            clearQueueEvent = LNetworkEvent.Connect(Prefix + "Clear",
+                onServerReceived: _ => HostClear(),
+                onClientReceived: OnClientReceivedClear);
+
+            removeFromQueueMessage = LNetworkMessage<string>.Connect(Prefix + "RemoveFromQueue",
+                onClientReceived: OnClientReceivedRemoveFromQueue);
+
+            loadVideoMessage = LNetworkMessage<string>.Connect(Prefix + "LoadVideo",
+                onClientReceived: entry => VideoManager.Instance?.OnHostLoadingVideo(entry));
+
+            playVideoMessage = LNetworkMessage<VideoPlayData>.Connect(Prefix + "PlayVideo",
+                onClientReceived: data => VideoManager.Instance?.OnHostPlayingVideo(data.input, data.videoUrl, data.startTime));
+
+            syncPlaybackMessage = LNetworkMessage<float>.Connect(Prefix + "SyncPlayback",
+                onClientReceived: time => VideoManager.Instance?.OnHostPlaybackTime(time));
+
+            playFallbackEvent = LNetworkEvent.Connect(Prefix + "PlayFallback",
+                onClientReceived: () => VideoManager.Instance?.OnHostPlayingFallback());
+
+            requestTVStateEvent = LNetworkEvent.Connect(Prefix + "RequestTVState",
+                onServerReceived: OnServerReceivedRequestTVState);
+
+            syncTVStateMessage = LNetworkMessage<TVStateData>.Connect(Prefix + "SyncTVState",
+                onClientReceived: state => VideoManager.Instance?.ApplyTVStateFromNetwork(state));
+
+            YoutubeOnTVBase.Log.LogInfo("Network messages registered");
         }
 
-        private void InitializeNetworkMessages()
+        // ===== Requests (any machine) =====
+
+        /// <param name="entry">An entry already normalised with <see cref="VideoInput.Normalize"/>.</param>
+        public void RequestAddVideo(string entry)
         {
-            // Add video to queue
-            addVideoMessage = LNetworkMessage<string>.Connect(
-                identifier: "YoutubeOnTV_AddVideo",
-                onServerReceived: OnServerReceivedAddVideo,
-                onClientReceived: OnClientReceivedAddVideo
-            );
-
-            // Skip current video
-            skipVideoEvent = LNetworkEvent.Connect(
-                identifier: "YoutubeOnTV_Skip",
-                onServerReceived: OnServerReceivedSkip,
-                onClientReceived: OnClientReceivedSkip
-            );
-
-            // Clear queue
-            clearQueueEvent = LNetworkEvent.Connect(
-                identifier: "YoutubeOnTV_Clear",
-                onServerReceived: OnServerReceivedClear,
-                onClientReceived: OnClientReceivedClear
-            );
-
-            // Remove a video from the queue (host broadcasts to clients when it starts playing one)
-            removeFromQueueMessage = LNetworkMessage<string>.Connect(
-                identifier: "YoutubeOnTV_RemoveFromQueue",
-                onClientReceived: OnClientReceivedRemoveFromQueue
-            );
-
-            // Play video (host broadcasts to clients)
-            playVideoMessage = LNetworkMessage<VideoPlayData>.Connect(
-                identifier: "YoutubeOnTV_PlayVideo",
-                onClientReceived: OnClientReceivedPlayVideo
-            );
-
-            // Sync playback position (host broadcasts to clients)
-            syncPlaybackMessage = LNetworkMessage<float>.Connect(
-                identifier: "YoutubeOnTV_SyncPlayback",
-                onClientReceived: OnClientReceivedSyncPlayback
-            );
-
-            // Play fallback video (host broadcasts to clients)
-            playFallbackEvent = LNetworkEvent.Connect(
-                identifier: "YoutubeOnTV_PlayFallback",
-                onClientReceived: OnClientReceivedPlayFallback
-            );
-
-            // Request TV state (client asks host for current state)
-            requestTVStateEvent = LNetworkEvent.Connect(
-                identifier: "YoutubeOnTV_RequestTVState",
-                onServerReceived: OnServerReceivedRequestTVState
-            );
-
-            // Sync TV state (host sends current state to clients)
-            syncTVStateMessage = LNetworkMessage<TVStateData>.Connect(
-                identifier: "YoutubeOnTV_SyncTVState",
-                onClientReceived: OnClientReceivedSyncTVState
-            );
-
-            YoutubeOnTVBase.Instance.mls.LogInfo("Network messages initialized!");
-        }
-
-        // ===== PUBLIC API =====
-
-        /// <summary>
-        /// Request to add a video to the queue (called by client)
-        /// </summary>
-        public void RequestAddVideo(string input)
-        {
-            if (LNetworkUtils.IsHostOrServer)
-            {
-                // If we're the host, add directly and broadcast
-                OnServerReceivedAddVideo(input, 0);
-            }
+            if (IsHost)
+                HostAddVideo(entry);
             else
-            {
-                // Send to server
-                addVideoMessage.SendServer(input);
-            }
+                addVideoMessage.SendServer(entry);
         }
 
-        /// <summary>
-        /// Request to skip the current video (called by client)
-        /// </summary>
         public void RequestSkipVideo()
         {
-            if (LNetworkUtils.IsHostOrServer)
-            {
-                // If we're the host, skip directly and broadcast
-                OnServerReceivedSkip(0);
-            }
+            if (IsHost)
+                HostSkip();
             else
-            {
-                // Send to server
                 skipVideoEvent.InvokeServer();
-            }
         }
 
-        /// <summary>
-        /// Request to clear the queue (called by client)
-        /// </summary>
         public void RequestClearQueue()
         {
-            if (LNetworkUtils.IsHostOrServer)
-            {
-                // If we're the host, clear directly and broadcast
-                OnServerReceivedClear(0);
-            }
+            if (IsHost)
+                HostClear();
             else
-            {
-                // Send to server
                 clearQueueEvent.InvokeServer();
-            }
         }
 
         /// <summary>
-        /// Tell every client to drop a video from its queue because the host started playing it (host only)
-        /// </summary>
-        public void BroadcastRemoveFromQueue(string input)
-        {
-            if (!LNetworkUtils.IsHostOrServer)
-                return;
-
-            removeFromQueueMessage.SendClients(input);
-
-            YoutubeOnTVBase.Instance.mls.LogInfo($"Broadcasting queue removal: {input}");
-        }
-
-        /// <summary>
-        /// Broadcast video playback to all clients (host only)
-        /// </summary>
-        public void BroadcastPlayVideo(string url, string audioUrl, float startTime)
-        {
-            if (!LNetworkUtils.IsHostOrServer)
-            {
-                YoutubeOnTVBase.Instance.mls.LogWarning("Only host can broadcast play video!");
-                return;
-            }
-
-            var data = new VideoPlayData { url = url, audioUrl = audioUrl, startTime = startTime };
-            playVideoMessage.SendClients(data);
-
-            YoutubeOnTVBase.Instance.mls.LogInfo($"Broadcasting play video: {url} at {startTime}s");
-        }
-
-        /// <summary>
-        /// Broadcast playback position to keep clients in sync (host only)
-        /// </summary>
-        public void BroadcastPlaybackTime(float time)
-        {
-            if (!LNetworkUtils.IsHostOrServer)
-                return;
-
-            syncPlaybackMessage.SendClients(time);
-        }
-
-        /// <summary>
-        /// Broadcast to all clients to play fallback video (host only)
-        /// </summary>
-        public void BroadcastPlayFallback()
-        {
-            if (!LNetworkUtils.IsHostOrServer)
-            {
-                YoutubeOnTVBase.Instance.mls.LogWarning("Only host can broadcast play fallback!");
-                return;
-            }
-
-            playFallbackEvent.InvokeClients();
-            YoutubeOnTVBase.Instance.mls.LogInfo("Broadcasting play fallback");
-        }
-
-        /// <summary>
-        /// Request current TV state from host (client only)
+        /// Asks the host for the TV and queue state; called once the local client has joined.
         /// </summary>
         public void RequestTVState()
         {
-            if (LNetworkUtils.IsHostOrServer)
-            {
-                YoutubeOnTVBase.Instance.mls.LogWarning("Host doesn't need to request TV state!");
+            if (IsHost)
                 return;
-            }
 
+            YoutubeOnTVBase.Log.LogInfo("Requesting TV state from host");
             requestTVStateEvent.InvokeServer();
-            YoutubeOnTVBase.Instance.mls.LogInfo("Requesting TV state from host");
         }
 
-        /// <summary>
-        /// Broadcast current TV state to all clients (host only)
-        /// </summary>
-        public void BroadcastTVState(TVStateData state)
+        // ===== Host handlers =====
+
+        private void HostAddVideo(string entry)
         {
-            if (!LNetworkUtils.IsHostOrServer)
-            {
-                YoutubeOnTVBase.Instance.mls.LogWarning("Only host can broadcast TV state!");
+            // Normalise again: a client could run an older parser.
+            entry = VideoInput.Normalize(entry);
+            if (entry == null)
                 return;
-            }
 
-            syncTVStateMessage.SendClients(state);
-            YoutubeOnTVBase.Instance.mls.LogInfo($"Broadcasting TV state - TVOn: {state.isTVOn}, Fallback: {state.isPlayingFallback}, URL: {state.currentVideoUrl}");
+            YoutubeOnTVBase.Log.LogInfo($"[Host] Adding to queue: {entry}");
+            VideoQueue.Add(entry);
+            addVideoMessage.SendClients(entry, OtherClients);
         }
 
-        // ===== SERVER CALLBACKS =====
-
-        private void OnServerReceivedAddVideo(string input, ulong clientId)
+        private void HostSkip()
         {
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Host] Received add video request: {input}");
-
-            // Broadcast to all clients to add the video
-            addVideoMessage.SendClients(input);
+            YoutubeOnTVBase.Log.LogInfo("[Host] Skip");
+            VideoManager.Instance?.OnSkipRequested();
+            skipVideoEvent.InvokeClients(OtherClients);
         }
 
-        private void OnServerReceivedSkip(ulong clientId)
+        private void HostClear()
         {
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Host] Received skip request");
-
-            // Broadcast to all clients to skip
-            skipVideoEvent.InvokeClients();
-        }
-
-        private void OnServerReceivedClear(ulong clientId)
-        {
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Host] Received clear queue request");
-
-            // Broadcast to all clients to clear
-            clearQueueEvent.InvokeClients();
+            YoutubeOnTVBase.Log.LogInfo("[Host] Clear queue");
+            VideoManager.Instance?.OnClearRequested();
+            clearQueueEvent.InvokeClients(OtherClients);
         }
 
         private void OnServerReceivedRequestTVState(ulong clientId)
         {
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Host] Received TV state request from client {clientId}");
-
-            // Get current TV state from VideoManager and broadcast to all clients
-            // This ensures the requesting client and any other clients get synced
-            if (VideoManager.Instance != null)
-            {
-                TVStateData state = VideoManager.Instance.GetCurrentTVState();
-                BroadcastTVState(state);
-            }
-        }
-
-        // ===== CLIENT CALLBACKS =====
-
-        private void OnClientReceivedAddVideo(string input)
-        {
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Client] Adding video to queue: {input}");
-            VideoQueue.Add(input);
-        }
-
-        private void OnClientReceivedRemoveFromQueue(string input)
-        {
-            // The host already removed it locally before broadcasting.
-            if (LNetworkUtils.IsHostOrServer)
+            if (VideoManager.Instance == null)
                 return;
 
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Client] Removing video from queue: {input}");
-            VideoQueue.RemoveFirstMatch(input);
+            YoutubeOnTVBase.Log.LogInfo($"[Host] Sending TV state to client {clientId}");
+            // Only the client that asked; everyone else is already in sync.
+            syncTVStateMessage.SendClient(VideoManager.Instance.GetCurrentTVState(), clientId);
+        }
+
+        // ===== Host broadcasts =====
+
+        public void BroadcastRemoveFromQueue(string entry)
+        {
+            if (IsHost)
+                removeFromQueueMessage.SendClients(entry, OtherClients);
+        }
+
+        public void BroadcastLoadVideo(string entry)
+        {
+            if (IsHost)
+                loadVideoMessage.SendClients(entry, OtherClients);
+        }
+
+        public void BroadcastPlayVideo(string entry, string videoUrl, float startTime)
+        {
+            if (!IsHost)
+                return;
+
+            YoutubeOnTVBase.Log.LogInfo($"Broadcasting play: {videoUrl} ({entry}) at {startTime:0.0}s");
+            playVideoMessage.SendClients(new VideoPlayData { input = entry, videoUrl = videoUrl, startTime = startTime }, OtherClients);
+        }
+
+        public void BroadcastPlaybackTime(float time)
+        {
+            if (IsHost)
+                syncPlaybackMessage.SendClients(time, OtherClients);
+        }
+
+        public void BroadcastPlayFallback()
+        {
+            if (IsHost)
+                playFallbackEvent.InvokeClients(OtherClients);
+        }
+
+        // ===== Client handlers =====
+
+        private void OnClientReceivedAddVideo(string entry)
+        {
+            YoutubeOnTVBase.Log.LogInfo($"[Client] Adding to queue: {entry}");
+            VideoQueue.Add(entry);
+        }
+
+        private void OnClientReceivedRemoveFromQueue(string entry)
+        {
+            VideoQueue.RemoveFirstMatch(entry);
         }
 
         private void OnClientReceivedSkip()
         {
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Client] Skipping video");
-
-            if (VideoManager.Instance != null)
-            {
-                VideoManager.Instance.OnSkipRequested();
-            }
+            VideoManager.Instance?.OnSkipRequested();
         }
 
         private void OnClientReceivedClear()
         {
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Client] Clearing queue");
-
-            VideoQueue.Clear();
-
-            if (VideoManager.Instance != null)
-            {
-                VideoManager.Instance.OnSkipRequested();
-            }
-        }
-
-        private void OnClientReceivedPlayVideo(VideoPlayData data)
-        {
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Client] Received play video: {data.url} at {data.startTime}s");
-
-            if (VideoManager.Instance != null)
-            {
-                VideoManager.Instance.PlayVideoFromNetwork(data.url, data.audioUrl, data.startTime);
-            }
-        }
-
-        private void OnClientReceivedSyncPlayback(float time)
-        {
-            if (VideoManager.Instance != null)
-            {
-                VideoManager.Instance.SyncPlaybackTime(time);
-            }
-        }
-
-        private void OnClientReceivedPlayFallback()
-        {
-            YoutubeOnTVBase.Instance.mls.LogInfo("[Client] Received play fallback command");
-
-            if (VideoManager.Instance != null)
-            {
-                VideoManager.Instance.PlayFallbackFromNetwork();
-            }
-        }
-
-        private void OnClientReceivedSyncTVState(TVStateData state)
-        {
-            YoutubeOnTVBase.Instance.mls.LogInfo($"[Client] Received TV state - TVOn: {state.isTVOn}, Fallback: {state.isPlayingFallback}, URL: {state.currentVideoUrl}");
-
-            if (VideoManager.Instance != null)
-            {
-                VideoManager.Instance.ApplyTVStateFromNetwork(state);
-            }
+            VideoManager.Instance?.OnClearRequested();
         }
     }
 
-    // Data structure for video playback sync
     [System.Serializable]
     public struct VideoPlayData
     {
-        public string url;
-        public string audioUrl;
+        public string input;
+        public string videoUrl;
         public float startTime;
     }
 
-    // Data structure for complete TV state sync (used when players join)
+    /// <summary>
+    /// Everything a joining client needs to catch up.
+    /// </summary>
     [System.Serializable]
     public struct TVStateData
     {
         public bool isTVOn;
-        public bool isPlayingFallback;
-        public string currentVideoUrl;
-        public string currentAudioUrl;
-        public float currentPlaybackTime;
-        public bool isPlaying;
+        public int mode;
+        public string input;
+        public string videoUrl;
+        public float playbackTime;
+        public string[] queue;
     }
 }

@@ -6,6 +6,28 @@ namespace YoutubeOnTV.Patches
     [HarmonyPatch(typeof(Terminal))]
     internal class TerminalPatch
     {
+        /// <summary>
+        /// Answers "tv ..." commands before the vanilla parser sees them. The vanilla parser
+        /// lowercases and strips punctuation (which would mangle URLs and video ids) and
+        /// could match words of a search query against door codes or other keywords.
+        /// </summary>
+        [HarmonyPatch("ParsePlayerSentence")]
+        [HarmonyPrefix]
+        private static bool ParsePlayerSentencePrefix(Terminal __instance, ref TerminalNode __result)
+        {
+            string text = __instance.screenText.text;
+            int typed = __instance.textAdded;
+            if (typed <= 0 || typed > text.Length)
+                return true;
+
+            TerminalNode node = YoutubeOnTVBase.HandleTerminalCommand(text.Substring(text.Length - typed));
+            if (node == null)
+                return true;
+
+            __result = node;
+            return false;
+        }
+
         // Patch the TextChanged method to allow longer input for YouTube URLs
         [HarmonyPatch("TextChanged")]
         [HarmonyPrefix]

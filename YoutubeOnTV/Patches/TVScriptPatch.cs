@@ -21,6 +21,15 @@ namespace YoutubeOnTV.Patches
             return false;
         }
 
+        // TVScript.OnEnable hooks this onto whatever tvScript.video is, which after the TV has
+        // been stored and placed again is our player; it would start the vanilla clips.
+        [HarmonyPatch("TVFinishedClip")]
+        [HarmonyPrefix]
+        private static bool TVFinishedClipPatch()
+        {
+            return false;
+        }
+
         // Patch: Replace TV power state changes to prevent vanilla video playback
         [HarmonyPatch("TurnTVOnOff")]
         [HarmonyPrefix]

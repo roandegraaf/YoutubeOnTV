@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    In-game test harness. Never packaged: build-thunderstore.sh only ships YoutubeOnTV.dll.
+    It does nothing unless the game is launched with the autotest argument that
+    tests/run-ingame-tests.sh passes.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>YoutubeOnTV.TestHarness</AssemblyName>
+    <RootNamespace>YoutubeOnTV.TestHarness</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <LibsDir>$(MSBuildProjectDirectory)/../../libs</LibsDir>
+    <YoutubeDLSharpDir Condition="'$(YoutubeDLSharpDir)' == ''">$(LibsDir)</YoutubeDLSharpDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../YoutubeOnTV/YoutubeOnTV.csproj">
+      <Private>False</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(LibsDir)/Assembly-CSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.Netcode.Runtime">
+      <HintPath>$(LibsDir)/Unity.Netcode.Runtime.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(LibsDir)/Unity.TextMeshPro.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="YoutubeDLSharp">
+      <HintPath>$(YoutubeDLSharpDir)/YoutubeDLSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BepInEx.Core" Version="5.*" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="UnityEngine.Modules" Version="2021.3.33" IncludeAssets="compile" />
+    <PackageReference Include="Xilophor.LethalNetworkAPI" Version="3.3.2" />
+  </ItemGroup>
+
+</Project>

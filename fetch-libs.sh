@@ -8,7 +8,6 @@
 set -euo pipefail
 
 GAMELIBS_VERSION="81.0.5-ngd.0"
-TERMINALAPI_PACKAGE="NotAtomicBomb/TerminalApi/1.5.5"
 YOUTUBEDLSHARP_PACKAGE="Lordfirespeed/YoutubeDLSharp/1.1.0"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +34,6 @@ fetch_thunderstore() {
   echo "  $dll"
 }
 
-fetch_thunderstore "$TERMINALAPI_PACKAGE" TerminalApi.dll
 fetch_thunderstore "$YOUTUBEDLSHARP_PACKAGE" YoutubeDLSharp.dll
 
 echo

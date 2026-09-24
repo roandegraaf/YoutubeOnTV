@@ -43,10 +43,6 @@
       <HintPath>$(GameManagedDir)/UnityEngine.UI.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="TerminalApi">
-      <HintPath>$(MSBuildProjectDirectory)/../libs/TerminalApi.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
     <Reference Include="YoutubeDLSharp">
       <HintPath>$(YoutubeDLSharpDir)/YoutubeDLSharp.dll</HintPath>
       <Private>False</Private>

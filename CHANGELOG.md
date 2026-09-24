@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0] - 2026-09-24
+
+**Every player in a lobby needs 0.3.0: the network messages changed, and older versions will not sync with it.**
+
+### Changed
+- Fixed YouTube videos playing without sound. YouTube now serves most videos as separate video and audio streams, and Unity's VideoPlayer cannot play an audio-only stream (observed under Proton: "VideoPlayer cannot play url"), so the companion audio player added in 0.2.10 never produced sound. Videos are now downloaded with yt-dlp and merged with ffmpeg into a local H.264/AAC MP4, which the TV plays from disk.
+- **Videos now download in full before they start.** A typical music video takes a few seconds; the next queued video is downloaded while the current one plays so it starts right away. ffmpeg (about 55 MB) is downloaded once on first launch, next to yt-dlp.
+- Fixed clients in multiplayer being unable to play the host's videos. YouTube stream URLs are locked to the IP address that requested them, so the host now shares the video (as a normal watch URL) and every player downloads their own copy, then follows the host's playback position.
+- Joining players now also receive the queue, and the host answers only the player who asked instead of restarting the TV for everyone.
+- Fixed an error at the main menu (`NullReferenceException` in `VideoManager.Start`) that meant joining players never asked the host for the TV state.
+- Fixed the queue, the current video and the fallback state carrying over into the next lobby, which could leave the TV dark after re-hosting.
+- Fixed a failed yt-dlp download leaving every later video stuck on loading forever; tool downloads are retried and yt-dlp runs have a timeout.
+- Fixed the TV sometimes staying black when a video failed to open under Proton (Media Foundation aborts the read without reporting an error); opening is now retried.
+- The terminal replies now actually show what happened (`tv queue` lists the queue). The previous dynamic replies were silently dropped by TerminalApi, which is no longer needed.
+- `tv add` with an 11-letter lowercase word (like `programming`) now searches instead of being treated as a video id; YouTube Shorts and live links are recognised.
+- Stopped the vanilla TV clip rotation from hijacking the player after the TV is stored and placed again.
+- A warning is logged when TVLoader is installed, since both mods take over the ship TV.
+
+### Added
+- Config options (`BepInEx/config/com.roandegraaf.youtubeontv.cfg`): `MaxVideoMinutes` (default 60), `MaxCacheMegabytes` (default 1024) and `PrefetchNextVideo` (default on).
+
 ## [0.2.11] - 2026-08-27
 
 ### Changed

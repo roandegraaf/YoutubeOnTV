@@ -24,7 +24,7 @@ Use [r2modman](https://thunderstore.io/c/lethal-company/p/ebkr/r2modman/) or Thu
 3. Launch the game
 4. That's it!
 
-The mod will automatically download what it needs on first run.
+The mod automatically downloads what it needs (yt-dlp and ffmpeg) on first run.
 
 ## How to use
 
@@ -48,26 +48,37 @@ Empty the entire queue (emergency use only)
 ## Example
 
 ```
-> tv add subway surfers gameplay
-Video added to queue!
+> tv add dQw4w9WgXcQ
+Added to queue: youtu.be/dQw4w9WgXcQ
 
-> tv add 10 hours of silence
-Video added to queue!
+> tv add subway surfers gameplay
+Added to queue: search: subway surfers gameplay
 
 > tv queue
-Current queue:
-1. ytsearch:subway surfers gameplay
-2. ytsearch:10 hours of silence
+Now playing: youtu.be/dQw4w9WgXcQ
+
+Videos in queue: 1
+1. search: subway surfers gameplay
 
 > tv skip
-Skipped! (Good call)
+Skipped the current video.
 ```
 
 ## Important Notes
 
-- First video might take a few seconds to load (yt-dlp is downloading in the background)
-- The mod picks 360p-480p videos automatically to keep things crispy
-- Videos are synced for all players
+- Videos are downloaded before they play (480p H.264, a few seconds for a typical music video). The next video in the queue downloads while the current one plays, so it starts right away.
+- The first launch downloads yt-dlp and ffmpeg (about 70 MB together) into the plugin folder. yt-dlp keeps itself up to date.
+- Every player downloads the video themselves and follows the host's position, so everyone sees the same thing.
+- Downloaded videos are cached in the plugin folder (1 GB by default, oldest removed first).
+- Don't run this together with TVLoader: both take over the ship TV.
+
+## Configuration
+
+`BepInEx/config/com.roandegraaf.youtubeontv.cfg`:
+
+- `MaxVideoMinutes` (default 60): longest video that can be queued
+- `MaxCacheMegabytes` (default 1024): size of the video cache
+- `PrefetchNextVideo` (default on): download the next queued video while the current one plays
 
 ## Credits
 
